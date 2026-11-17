@@ -38,6 +38,7 @@ const ICONS = {
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  smile: '<path d="M22 11v1a10 10 0 1 1-9-10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/><path d="M16 5h6"/><path d="M19 2v6"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   chart: '<path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/>',
@@ -70,12 +71,193 @@ const cleanEmoji = (v) => { const g = firstGrapheme(v); return EMOJI_RE.test(g) 
 const emo = (e) => (e ? `<span class="emoji" aria-hidden="true">${esc(e)}</span>` : '');
 const HABIT_EMOJIS = ['💧', '🏃', '🧘', '📚', '🍎', '🥗', '💊', '😴', '🧹', '🦷', '🚴', '🏋️', '✍️', '🌞', '🧠', '🎯'];
 const TODO_EMOJIS = ['🛒', '📞', '📧', '💼', '🏠', '💳', '📦', '🎁', '🧾', '✈️', '🔧', '🐶', '📅', '🧺', '🎓', '❤️'];
-function emojiFieldHTML(id, value, picks) {
-  return `<div class="field"><label for="${id}">Symbol (optional)</label>
-    <div class="row emoji-row"><input id="${id}" class="emoji-input" type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(value)}" placeholder="🙂" aria-label="Symbol, ein Emoji">
-      <button type="button" class="btn ghost" data-action="emoji-clear" data-target="${id}">Entfernen</button></div>
-    <div class="emoji-picks" role="group" aria-label="Vorschläge">${picks.map((e) => `<button type="button" class="emoji-pick" data-action="emoji-pick" data-emoji="${e}" data-target="${id}" aria-pressed="${e === value}" aria-label="Symbol ${e} wählen">${e}</button>`).join('')}</div></div>`;
+const symbolHTML = (e) => (e ? `<span class="emoji-big" aria-hidden="true">${esc(e)}</span>` : icon('smile'));
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* egal */ } };
+
+/* ---------- Emoji-Auswahl ----------
+   Links neben dem Namen sitzt ein Symbol-Knopf. Er öffnet ein Fenster mit ALLEN Emojis (emoji-de.json, deutsche Namen),
+   mit Suche und Kategorien. Tippt man einen bekannten Namen (z. B. "Wasser"), setzt die App das passende Emoji sofort
+   selbst ein, solange man nicht von Hand eines gewählt hat. */
+const normTxt = (s) => String(s || '').toLowerCase().replace(/ß/g, 'ss').normalize('NFD').replace(/[̀-ͯ]/g, '');   // "Zähne" → "zahne"
+const QUICK_RAW = {
+  wasser: '💧', trinken: '🥤', sport: '🏃', laufen: '🏃', joggen: '🏃', rennen: '🏃', training: '💪', fitness: '🏋️', gym: '🏋️', krafttraining: '🏋️',
+  yoga: '🧘', meditieren: '🧘', meditation: '🧘', dehnen: '🤸', schwimmen: '🏊', radfahren: '🚴', fahrrad: '🚴', wandern: '🥾', spazieren: '🚶', spaziergang: '🚶', gehen: '🚶', schritte: '👟',
+  lesen: '📚', buch: '📖', bücher: '📚', lernen: '🎓', studieren: '🎓', uni: '🎓', schule: '🏫', hausaufgaben: '📝', schreiben: '✍️', tagebuch: '📓', journal: '📓', notizen: '📝',
+  schlafen: '😴', schlaf: '😴', bett: '🛏️', aufstehen: '⏰', wecker: '⏰', zähne: '🦷', zahn: '🦷', zahnarzt: '🦷', zahnseide: '🦷',
+  medikamente: '💊', tabletten: '💊', vitamine: '💊', pille: '💊', arzt: '🩺', termin: '📅', kalender: '📅',
+  obst: '🍎', apfel: '🍎', banane: '🍌', bananen: '🍌', gemüse: '🥦', salat: '🥗', essen: '🍽️', frühstück: '🥣', mittagessen: '🍽️', abendessen: '🍽️', kochen: '🍳',
+  kaffee: '☕', tee: '🍵', bier: '🍺', wein: '🍷', alkohol: '🍷', rauchen: '🚬', zucker: '🍬', snack: '🍿', protein: '🥩', eier: '🥚', milch: '🥛', brot: '🍞',
+  putzen: '🧹', aufräumen: '🧹', saugen: '🧹', wäsche: '🧺', waschen: '🧺', müll: '🗑️', einkaufen: '🛒', einkauf: '🛒', supermarkt: '🛒',
+  telefon: '📞', anrufen: '📞', mail: '📧', email: '📧', nachricht: '💬', post: '📬', paket: '📦',
+  geld: '💰', sparen: '💰', rechnung: '🧾', rechnungen: '🧾', steuer: '🧾', bank: '🏦', miete: '🏠', haus: '🏠', wohnung: '🏠', garten: '🌱', pflanzen: '🪴', gießen: '🪴',
+  hund: '🐶', gassi: '🐕', katze: '🐱', auto: '🚗', tanken: '⛽', zug: '🚆', flug: '✈️', reise: '✈️', urlaub: '🏖️', koffer: '🧳', packen: '🧳',
+  geburtstag: '🎂', geschenk: '🎁', party: '🎉', musik: '🎵', gitarre: '🎸', klavier: '🎹', singen: '🎤', malen: '🎨', zeichnen: '✏️', fotografieren: '📷', film: '🎬', serie: '📺', spielen: '🎮',
+  handy: '📱', laptop: '💻', arbeit: '💼', arbeiten: '💼', job: '💼', meeting: '👥', projekt: '📁', sonne: '☀️', sonnencreme: '🧴', duschen: '🚿', dusche: '🚿', baden: '🛁',
+  eincremen: '🧴', beten: '🙏', danke: '🙏', herz: '❤️', liebe: '❤️', familie: '👨‍👩‍👧', freunde: '👫', ziel: '🎯', fokus: '🎯', idee: '💡', denken: '🧠',
+};
+const QUICK = Object.fromEntries(Object.entries(QUICK_RAW).map(([k, v]) => [normTxt(k), v]));
+let emojiData = null, emojiLoading = null, emojiMaxVersion = Infinity;
+function probeMaxVersion(items) {                           // höchste Emoji-Version, die dieses Gerät wirklich zeichnen kann (sonst Kästchen)
+  try {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 44;
+    const cx = cv.getContext('2d', { willReadFrequently: true });
+    cx.font = '28px sans-serif'; cx.textBaseline = 'top';
+    const draw = (ch) => { cx.clearRect(0, 0, 44, 44); cx.fillText(ch, 2, 2); const px = cx.getImageData(0, 0, 44, 44).data; for (let i = 0; i < px.length; i += 4) if (px[i + 3] > 40 && (Math.abs(px[i] - px[i + 1]) > 25 || Math.abs(px[i + 1] - px[i + 2]) > 25)) return true; return false; };
+    if (!draw('😀')) return Infinity;                        // keine Farb-Emojis erkennbar (zum Beispiel im Testbrowser): nichts ausblenden
+    const base = cx.measureText('😀').width;
+    const ok = (ch) => draw(ch) && cx.measureText(ch).width <= base * 1.4;   // Kästchen sind einfarbig, nicht unterstützte Folgen zerfallen in mehrere Zeichen
+    const versions = [...new Set(items.map((x) => x.v))].sort((a, b) => b - a);
+    for (const v of versions) if (items.filter((x) => x.v === v && !x.skins).slice(0, 4).some((x) => ok(x.e))) return v;
+    return Infinity;
+  } catch (e) { return Infinity; }
 }
+function prepareEmojis(d) {
+  d.items = d.list.map(([e, label, tags, g, v, skins]) => ({ e, label, nl: normTxt(label), nt: normTxt(tags).split('|'), g, v, skins }));
+  d.byLabel = new Map();
+  for (const it of d.items) if (!d.byLabel.has(it.nl)) d.byLabel.set(it.nl, it.e);
+  emojiMaxVersion = probeMaxVersion(d.items);
+}
+function loadEmojis() {
+  if (emojiData) return Promise.resolve(emojiData);
+  if (emojiLoading) return emojiLoading;
+  emojiLoading = Promise.resolve().then(() => fetch('emoji-de.json?v=' + (appVersion().replace(/\D/g, '') || '0')))   // Promise.resolve: auch ein fehlendes fetch wird zum normalen Fehler
+    .then((r) => { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+    .then((d) => { prepareEmojis(d); emojiData = d; return d; })
+    .catch((e) => { emojiLoading = null; throw e; });
+  return emojiLoading;
+}
+function autoEmojiFor(name) {                                // bekanntes Wort im Namen → passendes Emoji (nur bei sicherem Treffer)
+  const norm = normTxt(name).trim();
+  if (!norm) return '';
+  const tokens = norm.split(/[^a-z0-9]+/).filter(Boolean);
+  for (const t of tokens) if (QUICK[t]) return QUICK[t];
+  if (emojiData) {
+    if (emojiData.byLabel.has(norm)) return emojiData.byLabel.get(norm);
+    for (const t of tokens) if (emojiData.byLabel.has(t)) return emojiData.byLabel.get(t);
+  }
+  return '';
+}
+function setSymbol(target, emoji, manual) {                  // Symbol im Formular setzen (Knopf, verstecktes Feld, Entwurf)
+  const inp = $('#' + target), btn = document.querySelector(`.symbol-btn[data-target="${target}"]`);
+  if (!inp || !btn) return;
+  inp.value = emoji;
+  btn.dataset.manual = manual ? '1' : '0';
+  btn.innerHTML = symbolHTML(emoji);
+  btn.setAttribute('aria-label', emoji ? `Symbol ${emoji}, ändern` : 'Symbol wählen');
+  inp.dispatchEvent(new Event('input', { bubbles: true }));
+}
+function autoSymbol(nameInput) {
+  const target = nameInput.id === 'f-name' ? 'f-emoji' : 'tf-emoji';
+  const btn = document.querySelector(`.symbol-btn[data-target="${target}"]`);
+  if (!btn || btn.dataset.manual === '1') return;            // von Hand gewählt (oder bewusst leer gelassen): nie überschreiben
+  const e = autoEmojiFor(nameInput.value);
+  if ($('#' + target).value !== e) setSymbol(target, e, false);
+  if (!emojiData) loadEmojis().then(() => { if (document.contains(nameInput)) autoSymbol(nameInput); }).catch(() => {});
+}
+function symbolFieldHTML(btnTarget, emoji, manual, inputHTML) {
+  return `<div class="row name-row"><button type="button" class="symbol-btn" data-action="emoji-open" data-target="${btnTarget}" data-manual="${manual ? 1 : 0}" aria-haspopup="dialog" aria-label="${emoji ? `Symbol ${emoji}, ändern` : 'Symbol wählen'}">${symbolHTML(emoji)}</button>
+    <input type="hidden" id="${btnTarget}" value="${esc(emoji)}">${inputHTML}</div>`;
+}
+
+/* ---- das Fenster mit den Emojis ---- */
+const PICKER_TABS = ['⭐', '😀', '👋', '🐻', '🍔', '✈️', '⚽', '💡', '🔣', '🏁'];   // 0 = Vorschläge, danach die 9 Gruppen
+const PICKER_TAB_NAMES = ['Vorschläge', 'Smileys & Emotionen', 'Menschen & Körper', 'Tiere & Natur', 'Essen & Trinken', 'Reisen & Orte', 'Aktivitäten', 'Gegenstände', 'Symbole', 'Flaggen'];
+const TONE_LABELS = ['Standard', 'Helle Hautfarbe', 'Mittelhelle Hautfarbe', 'Mittlere Hautfarbe', 'Mitteldunkle Hautfarbe', 'Dunkle Hautfarbe'];
+let pk = null;
+function recents() { try { return JSON.parse(lsGet('habit-tracker-emoji-recent') || '[]'); } catch (e) { return []; } }
+function pickerItems() {                                     // Inhalt des Rasters als Liste von {e, label}
+  const tone = pk.tone;
+  const show = (it) => ({ e: tone > 0 && it.skins ? it.skins[tone - 1] : it.e, label: it.label });
+  const q = normTxt(pk.q).trim();
+  if (q) {
+    if (!emojiData) return null;
+    const words = q.split(/\s+/);
+    const scored = [];
+    for (const it of emojiData.items) {
+      if (it.v > emojiMaxVersion) continue;
+      let best = 99, ok = true;
+      for (const w of words) {
+        let sc = 99;
+        if (it.nl === w) sc = 0; else if (it.nl.startsWith(w)) sc = 1; else if (it.nl.includes(w)) sc = 2;
+        else if (it.nt.includes(w)) sc = 3; else if (it.nt.some((t) => t.startsWith(w))) sc = 4; else if (it.nt.some((t) => t.includes(w))) sc = 5;
+        if (sc === 99) { ok = false; break; }
+        best = Math.min(best, sc);
+      }
+      if (ok) scored.push([best, it]);
+    }
+    scored.sort((a, b) => a[0] - b[0]);                       // innerhalb gleicher Güte bleibt die offizielle Reihenfolge
+    const out = scored.slice(0, 300).map(([, it]) => show(it));
+    const quick = QUICK[q];
+    if (quick) { const i = out.findIndex((x) => x.e === quick); const entry = i >= 0 ? out.splice(i, 1)[0] : { e: quick, label: q }; out.unshift(entry); }   // bekannte Wörter wie "Wasser": das typische Emoji zuerst
+    return out;
+  }
+  if (pk.tab === 0) {
+    const sug = $('#' + pk.target) && pk.target === 'tf-emoji' ? TODO_EMOJIS : HABIT_EMOJIS;
+    const all = [...new Set([...recents(), ...sug])];
+    return all.map((e) => ({ e, label: '' }));
+  }
+  if (!emojiData) return null;
+  return emojiData.items.filter((it) => it.g === pk.tab - 1 && it.v <= emojiMaxVersion).map(show);
+}
+function fillPicker() {
+  const grid = $('#picker-grid');
+  if (!grid || !pk) return;
+  const tones = $('.picker-tones');
+  const showTones = pk.tab === 2 && !pk.q.trim();
+  tones.hidden = !showTones;
+  if (showTones) tones.innerHTML = ['👋', '👋🏻', '👋🏼', '👋🏽', '👋🏾', '👋🏿'].map((e, i) => `<button type="button" class="tone" data-tone="${i}" aria-pressed="${pk.tone === i}" aria-label="${TONE_LABELS[i]}">${e}</button>`).join('');
+  const items = pickerItems();
+  if (items === null) { grid.innerHTML = `<p class="picker-msg" role="status">${emojiLoading ? 'Emojis werden geladen …' : 'Die Emoji-Liste konnte nicht geladen werden. Bist du online?'}</p>`; return; }
+  if (!items.length) { grid.innerHTML = `<p class="picker-msg" role="status">Kein Emoji für „${esc(pk.q.trim())}“ gefunden.</p>`; return; }
+  grid.innerHTML = items.map((x) => `<button type="button" class="emoji-cell" data-emoji="${x.e}" ${x.label ? `aria-label="${esc(x.label)}" title="${esc(x.label)}"` : ''}>${x.e}</button>`).join('');
+  grid.scrollTop = 0;
+}
+function renderPickerTabs() {
+  const el = $('.picker-tabs');
+  if (el) el.innerHTML = PICKER_TABS.map((e, i) => `<button type="button" role="tab" class="picker-tab" data-tab="${i}" aria-selected="${!pk.q.trim() && pk.tab === i}" aria-label="${PICKER_TAB_NAMES[i]}">${e}</button>`).join('');
+}
+function openPicker(target) {
+  pk = { target, tab: 0, q: '', tone: Number(lsGet('habit-tracker-emoji-tone')) || 0 };
+  const dlg = $('#picker');
+  dlg.innerHTML = `<div class="picker-head"><h2 id="picker-title">Symbol wählen</h2>
+      <button type="button" class="btn ghost small" data-picker="none">Kein Symbol</button>
+      <button type="button" class="icon-btn" data-picker="close" aria-label="Schließen">${icon('x')}</button></div>
+    <label class="search picker-search"><span class="sr">Emoji suchen</span>${icon('search')}<input id="picker-q" type="search" placeholder="Suchen, z. B. Wasser" autocomplete="off" enterkeyhint="done"></label>
+    <div class="picker-tabs" role="tablist" aria-label="Kategorien"></div>
+    <div class="picker-tones" aria-label="Hautfarbe" hidden></div>
+    <div class="picker-grid" id="picker-grid"></div>`;
+  dlg.showModal();
+  const h2 = dlg.querySelector('h2'); h2.tabIndex = -1; h2.focus();
+  renderPickerTabs(); fillPicker();
+  loadEmojis().then(() => { if (pk) { renderPickerTabs(); fillPicker(); } }).catch(() => { if (pk) fillPicker(); });
+}
+function pickEmoji(e) {
+  const t = pk && pk.target;
+  const list = [e, ...recents().filter((x) => x !== e)].slice(0, 16);
+  lsSet('habit-tracker-emoji-recent', JSON.stringify(list));
+  $('#picker').close();
+  if (t) setSymbol(t, e, true);
+}
+(function initPicker() {
+  const dlg = document.getElementById('picker');
+  if (!dlg) return;
+  dlg.addEventListener('click', (ev) => {
+    if (ev.target === dlg) { dlg.close(); return; }
+    const t = ev.target.closest('[data-picker], [data-tab], [data-tone], .emoji-cell');
+    if (!t || !pk) return;
+    if (t.dataset.picker === 'close') dlg.close();
+    else if (t.dataset.picker === 'none') { const tg = pk.target; dlg.close(); setSymbol(tg, '', true); }
+    else if (t.dataset.tab !== undefined) { pk.tab = Number(t.dataset.tab); pk.q = ''; $('#picker-q').value = ''; renderPickerTabs(); fillPicker(); }
+    else if (t.dataset.tone !== undefined) { pk.tone = Number(t.dataset.tone); lsSet('habit-tracker-emoji-tone', String(pk.tone)); fillPicker(); }
+    else if (t.classList.contains('emoji-cell')) pickEmoji(t.dataset.emoji);
+  });
+  dlg.addEventListener('input', (ev) => { if (ev.target.id === 'picker-q' && pk) { pk.q = ev.target.value; renderPickerTabs(); fillPicker(); } });
+  dlg.addEventListener('keydown', (ev) => {                  // Enter in der Suche: erstes Ergebnis sofort einsetzen
+    if (ev.key === 'Enter' && ev.target.id === 'picker-q') { ev.preventDefault(); const first = dlg.querySelector('.emoji-cell'); if (first) pickEmoji(first.dataset.emoji); }
+  });
+  dlg.addEventListener('close', () => { pk = null; });
+})();
 
 /* ---------- Datum-Helfer ---------- */
 const key = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -258,14 +440,15 @@ function toggleSub(todoId, subId) {
 }
 // ---- Seite "Neue Aufgabe" / "Aufgabe bearbeiten": Titel, Unterpunkte, Bereich, Preset
 function newTodoDraft(t) {
-  return t ? { text: t.text, emoji: t.emoji || '', subs: t.subs.map((s) => ({ ...s })), list: t.list, savePreset: false }
-           : { text: '', emoji: '', subs: [], list: 'today', savePreset: false };
+  return t ? { text: t.text, emoji: t.emoji || '', emojiManual: true, subs: t.subs.map((s) => ({ ...s })), list: t.list, savePreset: false }
+           : { text: '', emoji: '', emojiManual: false, subs: [], list: 'today', savePreset: false };
 }
 function syncTodoDraft() {                                   // DOM → Entwurf
   if (!todoForm || !$('#todo-edit-form')) return;
   const prev = new Map(todoForm.subs.map((s) => [s.id, s]));
   todoForm.text = $('#tf-text').value;
   todoForm.emoji = cleanEmoji($('#tf-emoji').value);
+  todoForm.emojiManual = $('.symbol-btn[data-target="tf-emoji"]').dataset.manual === '1';
   todoForm.subs = [...document.querySelectorAll('#todo-edit-form .sub-input')].map((i) => ({ id: i.dataset.sid, text: i.value, done: !!(prev.get(i.dataset.sid) || {}).done }));
   const l = document.querySelector('#todo-edit-form input[name="tf-list"]:checked');
   if (l) todoForm.list = l.value;
@@ -289,6 +472,7 @@ function applyPreset(id) {
   syncTodoDraft();
   todoForm.text = p.name;
   todoForm.emoji = p.emoji || '';
+  todoForm.emojiManual = true;
   todoForm.subs = p.subs.map((text) => ({ id: newSid(), text, done: false }));
   render(true);
   announce(`Preset geladen: ${p.name}`);
@@ -384,6 +568,7 @@ function render(fresh) {
   moveIndicator(!indicatorPlaced);                            // beim ersten Mal sofort, danach gleitend
   if (fid) { const el = $(`[data-fid="${fid}"]`); if (el) el.focus({ preventScroll: true }); }
   if (view === 'today' || view === 'report') animateBar();
+  if (view === 'form' || view === 'todoform') loadEmojis().catch(() => {});   // Emoji-Liste im Hintergrund holen (Suche und Namenserkennung)
   replayPress();                                              // das neu gezeichnete Element federt nach, auf das gerade getippt wurde
 }
 
@@ -569,8 +754,8 @@ function reportHTML() {
 
 /* ---------- Neu / Bearbeiten (ganze Seite statt Dialog) ---------- */
 function newDraft(h) {
-  const d = h ? { name: h.name, emoji: h.emoji || '', target: h.target, days: [...h.days], time: h.time || '', before: h.time ? h.before : null }
-              : { name: '', emoji: '', target: 1, days: [...WEEK], time: '', before: null };
+  const d = h ? { name: h.name, emoji: h.emoji || '', emojiManual: true, target: h.target, days: [...h.days], time: h.time || '', before: h.time ? h.before : null }
+              : { name: '', emoji: '', emojiManual: false, target: 1, days: [...WEEK], time: '', before: null };
   d.custom = d.before !== null && !PRESETS.includes(d.before);   // Wert außerhalb der Auswahl → "Eigene Zeit"
   const cp = d.custom ? customParts(d.before) : { n: 1, u: 1440 };
   d.cn = cp.n; d.cu = cp.u;
@@ -580,6 +765,7 @@ function syncDraft() {                                       // DOM → Entwurf
   if (!draft || !$('#habit-form')) return;
   draft.name = $('#f-name').value;
   draft.emoji = cleanEmoji($('#f-emoji').value);
+  draft.emojiManual = $('.symbol-btn[data-target="f-emoji"]').dataset.manual === '1';
   draft.target = parseInt($('#f-target').value, 10) || 1;
   draft.days = [...document.querySelectorAll('#habit-form input[name="day"]:checked')].map((i) => Number(i.value));
   draft.time = $('#f-time').value;
@@ -603,9 +789,8 @@ function formHTML() {
       <p>${h ? 'Ändere Ziel, Tage oder Erinnerung.' : 'Was möchtest du dir angewöhnen?'}</p></div></header>
     <form id="habit-form" class="form-page" novalidate>
       <div class="field"><label for="f-name">Name</label>
-        <input id="f-name" type="text" maxlength="40" autocomplete="off" enterkeyhint="done" placeholder="z. B. 2 Bananen essen" value="${esc(d.name)}" ${formErr ? 'aria-invalid="true" aria-describedby="f-name-err"' : ''}>
+        ${symbolFieldHTML('f-emoji', d.emoji, d.emojiManual, `<input id="f-name" type="text" maxlength="40" autocomplete="off" enterkeyhint="done" placeholder="z. B. 2 Bananen essen" value="${esc(d.name)}" ${formErr ? 'aria-invalid="true" aria-describedby="f-name-err"' : ''}>`)}
         <p class="error" id="f-name-err" role="alert" ${formErr ? '' : 'hidden'}>${esc(formErr)}</p></div>
-      ${emojiFieldHTML('f-emoji', d.emoji, HABIT_EMOJIS)}
       <div class="field"><label for="f-target">Ziel pro Tag</label>
         <div class="stepper">
           <button type="button" data-step="-1" aria-label="Ziel verringern">${icon('minus')}</button>
@@ -785,9 +970,8 @@ function todoFormHTML() {
     <form id="todo-edit-form" class="form-page" novalidate>
       ${presetBlock}
       <div class="field"><label for="tf-text">Aufgabe</label>
-        <input id="tf-text" type="text" maxlength="200" autocomplete="off" enterkeyhint="done" placeholder="z. B. Koffer packen" value="${esc(d.text)}">
+        ${symbolFieldHTML('tf-emoji', d.emoji, d.emojiManual, `<input id="tf-text" type="text" maxlength="200" autocomplete="off" enterkeyhint="done" placeholder="z. B. Koffer packen" value="${esc(d.text)}">`)}
         <p class="error" id="tf-err" role="alert" hidden></p></div>
-      ${emojiFieldHTML('tf-emoji', d.emoji, TODO_EMOJIS)}
       <fieldset class="field"><legend>Unterpunkte</legend>
         ${d.subs.length ? `<ul class="sub-edit-list">${d.subs.map((x, i) => `<li class="sub-edit"><input type="text" class="sub-input" maxlength="200" data-sid="${x.id}" value="${esc(x.text)}" placeholder="Unterpunkt" aria-label="Unterpunkt ${i + 1}" enterkeyhint="next" autocomplete="off">
           <button type="button" class="icon-btn" data-action="sub-del" data-sid="${x.id}" aria-label="Unterpunkt ${i + 1} entfernen">${icon('x')}</button></li>`).join('')}</ul>` : ''}
@@ -1220,11 +1404,7 @@ function onFormInput(e) {
   syncDraft();
 }
 $('#view').addEventListener('input', (e) => {
-  if (e.target.classList && e.target.classList.contains('emoji-input')) {                         // nur ein Emoji zulassen
-    const v = cleanEmoji(e.target.value);
-    if (e.target.value !== v) e.target.value = v;
-    document.querySelectorAll(`.emoji-pick[data-target="${e.target.id}"]`).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.emoji === v)));
-  }
+  if (e.target.id === 'f-name' || e.target.id === 'tf-text') autoSymbol(e.target);   // bekanntes Wort im Namen → Emoji sofort einsetzen
   if (e.target.id === 'todo-search') { todoQuery = e.target.value; $('#todo-results').innerHTML = todoResultsHTML(); }   // nur die Ergebnisse neu zeichnen, das Feld behält Fokus und Cursor
   if (e.target.closest && e.target.closest('#todo-edit-form')) {
     syncTodoDraft();
@@ -1265,12 +1445,7 @@ $('#view').addEventListener('click', (e) => {
     case 'dec': setCount(k, h, count(k, h.id) - 1); break;
     case 'unskip': setSkip(k, h, null); break;
     case 'todo-toggle': toggleTodo(el.dataset.id); break;
-    case 'emoji-pick': case 'emoji-clear': {
-      const i = $('#' + el.dataset.target);
-      i.value = a === 'emoji-pick' ? el.dataset.emoji : '';
-      i.dispatchEvent(new Event('input', { bubbles: true }));
-      break;
-    }
+    case 'emoji-open': openPicker(el.dataset.target); break;
     case 'todo-new': location.hash = '#todo-neu'; break;
     case 'todo-edit': location.hash = '#todo-bearbeiten/' + el.dataset.id; break;
     case 'sub-toggle': toggleSub(el.dataset.id, el.dataset.sub); break;

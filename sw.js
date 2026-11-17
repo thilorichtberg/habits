@@ -2,8 +2,8 @@
 // Network-first mit Nachfrage: GitHub Pages erlaubt 10 Minuten Zwischenspeicher (max-age=600). Mit cache: 'no-cache'
 // fragt der Browser bei jedem Abruf kurz beim Server nach (bei unveränderten Dateien nur eine winzige 304-Antwort),
 // so kommt eine neue Version sofort an. Offline greift der Cache.
-const CACHE = 'habits-v4';
-const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'vendor/supabase.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
+const CACHE = 'habits-v5';
+const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'vendor/supabase.js', 'emoji-de.json', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));

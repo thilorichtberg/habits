@@ -13,7 +13,8 @@ Ohne Anmeldung läuft alles lokal im Browser (Daten bleiben auf dem Gerät). Syn
 - Abhaken per Kreis, Ziele pro Tag (zum Beispiel „2 Bananen"), frei wählbare Wochentage
 - Uhrzeit mit Erinnerung zur Uhrzeit oder **beliebig lange vorher** (Minuten bis 14 Tage)
 - Wischgesten: nach links löschen (mit Rückfrage und „Wiederherstellen"), nach rechts **überspringen mit Grund**. „Krankheit" zählt weder als verpasst noch in die Quote
-- Optionales Emoji als Symbol, Tagesquote in Prozent, Serie (aktuell und längste)
+- Optionales Emoji als Symbol links neben dem Namen: Ein Fenster mit **allen Emojis** (3.583 inkl. Hauttöne) mit deutscher Suche und Kategorien. Bekannte Wörter im Namen („Wasser“ → 💧, „Zähne putzen“ → 🦷) setzen das passende Emoji sofort selbst ein
+- Tagesquote in Prozent, Serie (aktuell und längste)
 - Kalender mit Tagesbericht: abgeschlossen, versäumt, übersprungen
 
 **To-Do**
@@ -57,8 +58,10 @@ Ohne Anmeldung läuft alles lokal im Browser (Daten bleiben auf dem Gerät). Syn
 | `index.html`, `app.js`, `style.css` | die App |
 | `sw.js`, `manifest.webmanifest`, Icons | Service Worker (Offline, Updates, Push), Installierbarkeit |
 | `vendor/supabase.js` | supabase-js 2.45.4, bewusst lokal eingebunden (Start auch offline) |
+| `emoji-de.json` | alle Emojis mit deutschen Namen und Suchbegriffen (wird erst beim Öffnen der Auswahl geladen) |
 | `supabase/*.sql` | Datenbank-Migrationen (Tabellen, Rechte, Row Level Security) |
 | `supabase/functions/send-reminders/` | Edge Function für die Push-Erinnerungen |
+| `tools/build-emoji.mjs` | erzeugt `emoji-de.json` aus dem Paket `emojibase-data` |
 | `tools/stamp.py` | stempelt vor jeder Veröffentlichung eine neue Version (umgeht den 10-Minuten-Cache von GitHub Pages) |
 
 ## Lokal ausprobieren
@@ -94,6 +97,7 @@ Die App wurde im Browser (Playwright, Handy-Viewports 375 und 390 px, hell und d
 - [supabase-js](https://github.com/supabase/supabase-js) (MIT), liegt unter `vendor/`
 - Symbole im Stil von [Lucide](https://lucide.dev) (ISC)
 - [web-push](https://github.com/web-push-libs/web-push) (MPL-2.0), wird zur Laufzeit in der Edge Function geladen
+- Emoji-Namen und Suchbegriffe: [emojibase-data](https://github.com/milesj/emojibase) (MIT), Texte aus dem Unicode CLDR (Unicode License)
 
 ## Lizenz
 
