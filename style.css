@@ -274,7 +274,7 @@ dialog::backdrop { background: rgba(10, 8, 5, .55); }
 form { display: grid; gap: var(--s4); }
 .field { display: grid; gap: 6px; border: 0; padding: 0; margin: 0; min-width: 0; }
 label, legend { font-weight: 600; font-size: .9375rem; padding: 0; }
-input[type="text"], input[type="number"], input[type="time"] {
+input[type="text"], input[type="number"], input[type="time"], input[type="email"], input[type="password"] {
   min-height: 48px; padding: 0 var(--s3); width: 100%;
   border: 1.5px solid var(--border); border-radius: var(--r-sm); background: var(--bg);
   font-size: 1rem; /* >=16px verhindert Auto-Zoom auf iOS */
@@ -282,7 +282,7 @@ input[type="text"], input[type="number"], input[type="time"] {
 input:focus-visible { outline-offset: 0; border-color: var(--focus); }
 input[aria-invalid="true"] { border-color: var(--danger); }
 .hint { color: var(--muted); font-size: .875rem; }
-.error { color: var(--danger); font-size: .875rem; font-weight: 600; }
+.error, .panel p.error { color: var(--danger); font-size: .9375rem; font-weight: 600; }   /* .panel p wäre sonst spezifischer und färbt grau */
 .row { display: flex; gap: var(--s2); align-items: center; }
 .row input { flex: 1; }
 .stepper { display: flex; gap: var(--s2); align-items: center; }
@@ -313,6 +313,7 @@ input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer
   transition: opacity var(--t-med) var(--ease), transform var(--t-med) var(--ease);
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.error { background: var(--danger); color: var(--bg); }   /* Fehler = rot, Kontrast ≥ 6:1 in beiden Themes */
 
 @media (min-width: 768px) {
   #view { padding-top: 48px; }

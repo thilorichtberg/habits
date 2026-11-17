@@ -7,6 +7,15 @@
    ===================================================================== */
 
 const KEY = 'habit-tracker-v1';
+
+/* ---------- Supabase (Cloud) ----------
+   Die URL und der "publishable" Key sind bewusst öffentlich. Geschützt sind die Daten
+   durch Login + Row Level Security in der Datenbank, nicht durch Geheimhaltung des Keys.
+   Niemals den service_role-Key hier eintragen. */
+const SUPABASE_URL = 'https://syzrpidpcgkmpjowpcfp.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_iOFLmwKaW6Qx65EBhPUzng_MH9q1IPg';
+const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+const cloud = { user: null, sync: 'idle', lastSync: 0, lastAttempt: 0, busy: false, error: '', email: '' };
 const WEEK = [1, 2, 3, 4, 5, 6, 0];                    // Mo..So als JS-getDay()-Werte
 const WD_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const $ = (s, r = document) => r.querySelector(s);
@@ -42,17 +51,21 @@ let calMonth = { y: viewDate.getFullYear(), m: viewDate.getMonth() };
 let lastPct = 0;
 let editingId = null;
 
-function emptyState() { return { habits: [], log: {}, notified: {} }; }
+// Sync-Felder: ts = Änderungszeit je Tageseintrag ("2026-11-17|habitId" → ms), dirty = noch nicht hochgeladene Änderungen.
+function emptyState() { return { habits: [], log: {}, ts: {}, dirty: { habits: {}, logs: {} }, notified: {} }; }
 function load() {
   try {
     const r = JSON.parse(localStorage.getItem(KEY));
-    if (r && Array.isArray(r.habits)) return { habits: r.habits, log: r.log || {}, notified: r.notified || {} };
+    if (r && Array.isArray(r.habits)) {
+      const dirty = r.dirty || {};
+      return { habits: r.habits, log: r.log || {}, ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {} }, notified: r.notified || {} };
+    }
   } catch (e) { /* leer starten */ }
   return emptyState();
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(state)); }
-  catch (e) { toast('Speichern nicht möglich (Speicher voll oder gesperrt).'); }
+  catch (e) { toast('Speichern nicht möglich (Speicher voll oder gesperrt).', 'error'); }
 }
 
 /* ---------- Logik ---------- */
@@ -72,7 +85,11 @@ function setCount(k, h, n) {
   const day = (state.log[k] = state.log[k] || {});
   if (n === 0) delete day[h.id]; else day[h.id] = n;
   if (!Object.keys(day).length) delete state.log[k];
+  const tk = k + '|' + h.id;
+  state.ts[tk] = Date.now();                               // "0" bleibt als Eintrag erhalten, damit das Zurücknehmen mit synchronisiert wird
+  state.dirty.logs[tk] = 1;
   save();
+  queuePush();
   render();
   announce(h.target === 1 ? `${h.name}: ${n ? 'erledigt' : 'offen'}` : `${h.name}: ${n} von ${h.target}${n >= h.target ? ', erledigt' : ''}`);
 }
@@ -246,6 +263,8 @@ function habitsHTML() {
       <div class="info"><div class="name">${esc(h.name)}</div>
       <div class="meta">${h.target > 1 ? `Ziel ${h.target} · ` : ''}${daysLabel(h.days)}${h.remind ? ` · ${esc(h.remind)} Uhr` : ''}</div></div>${icon('edit')}</button></li>`).join('')}</ul>` : '<p class="muted">Noch nichts angelegt.</p>'}
 
+    <section class="section" aria-labelledby="h-cloud"><h2 id="h-cloud">Konto &amp; Cloud</h2>${accountHTML()}</section>
+
     <section class="section" aria-labelledby="h-notif"><h2 id="h-notif">Erinnerungen</h2>
       <div class="panel"><p class="status">${esc(notifText)}</p>${notifBtn}</div></section>
 
@@ -256,11 +275,180 @@ function habitsHTML() {
   </div>`;
 }
 
+/* ---------- Konto / Login ---------- */
+function accountHTML() {
+  if (!sb) return '<div class="panel"><p>Die Cloud-Anbindung konnte nicht geladen werden. Starte die App mit Internetverbindung neu.</p></div>';
+  if (cloud.user) {
+    const pending = Object.keys(state.dirty.habits).length + Object.keys(state.dirty.logs).length;
+    const time = cloud.lastSync ? fmt({ hour: '2-digit', minute: '2-digit' }).format(new Date(cloud.lastSync)) : '';
+    let msg;
+    if (cloud.sync === 'syncing') msg = 'Synchronisiere …';
+    else if (cloud.sync === 'error') msg = `<span class="error">Synchronisierung fehlgeschlagen.</span> Deine Daten sind auf diesem Gerät sicher${pending ? ` (${pending} Änderungen warten)` : ''}. Die App versucht es später erneut.`;
+    else if (cloud.sync === 'ok') msg = `Synchronisiert um ${time} Uhr.${pending ? ` ${pending} Änderungen warten noch.` : ''}`;
+    else msg = 'Noch nicht synchronisiert.';
+    return `<div class="panel"><p class="status">Angemeldet als ${esc(cloud.user.email)}</p><p>${msg}</p>
+      <div class="btn-row"><button class="btn" data-action="sync" ${cloud.sync === 'syncing' ? 'disabled' : ''}>Jetzt synchronisieren</button>
+      <button class="btn ghost" data-action="logout">Abmelden</button></div></div>`;
+  }
+  return `<form class="panel" id="login-form" novalidate>
+    <p>Melde dich an, um deine Daten in der Cloud zu sichern. Ohne Anmeldung bleibt alles nur auf diesem Gerät.</p>
+    <div class="field"><label for="l-email">E-Mail</label>
+      <input id="l-email" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" value="${esc(cloud.email)}"></div>
+    <div class="field"><label for="l-pass">Passwort</label>
+      <input id="l-pass" type="password" autocomplete="current-password"></div>
+    <p class="error" role="alert" ${cloud.error ? '' : 'hidden'}>${esc(cloud.error)}</p>
+    <button class="btn primary" type="submit" ${cloud.busy ? 'disabled' : ''}>${cloud.busy ? 'Anmelden …' : 'Anmelden'}</button>
+  </form>`;
+}
+function loginError(err) {
+  const m = String((err && err.message) || '');
+  if (err && err.status === 400) return 'E-Mail oder Passwort stimmt nicht.';
+  if (!err.status || /fetch|network/i.test(m)) return 'Keine Verbindung. Prüfe dein Internet und versuche es erneut.';
+  if (err.status === 429) return 'Zu viele Versuche. Warte einen Moment und probiere es dann erneut.';
+  return 'Anmeldung fehlgeschlagen. Versuche es später erneut.';
+}
+$('#view').addEventListener('submit', async (e) => {
+  if (e.target.id !== 'login-form') return;
+  e.preventDefault();
+  const email = $('#l-email').value.trim();
+  const password = $('#l-pass').value;
+  cloud.email = email;
+  if (!email || !password) { cloud.error = 'Bitte gib E-Mail und Passwort ein.'; render(); return; }
+  cloud.busy = true; cloud.error = ''; render();
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  cloud.busy = false;
+  if (error) {
+    cloud.error = loginError(error);
+    render();
+    const f = $('#l-pass'); if (f) f.focus();
+  }                                                         // Erfolg: onAuthStateChange übernimmt
+});
+/* ---------- Cloud-Sync (local-first) ----------
+   Grundidee: Die App arbeitet immer auf den lokalen Daten. Der Sync gleicht sie mit Supabase ab.
+   - Pull: alle Zeilen aus der Cloud holen (beim Start, Login, Wiederkehr in die App, Online-Gehen).
+   - Merge: pro Datensatz gewinnt die jüngere Änderung ("last write wins", nach Gerätezeit).
+   - Push: lokal geänderte Datensätze ("dirty") hochladen, kurz nach jeder Änderung (Debounce).
+   Datensätze ohne Zeitstempel (Altdaten von vor dem Sync) zählen als "uralt": die Cloud gewinnt bei Konflikt,
+   was nur lokal existiert, wird hochgeladen. So geht beim ersten Login nichts verloren. */
+const logKey = (day, id) => day + '|' + id;
+const splitKey = (k) => { const i = k.indexOf('|'); return [k.slice(0, i), k.slice(i + 1)]; };
+const msToIso = (ms) => new Date(ms || 0).toISOString();
+const lts = (v) => (v === undefined ? -1 : v);              // fehlender Zeitstempel (Altdaten) = älter als alles, auch als 0
+
+function touchHabit(h, ts = Date.now()) { h.updated = ts; state.dirty.habits[h.id] = 1; queuePush(); }
+function habitFromCloud(r) {
+  return { id: r.id, name: r.name, target: r.target, days: r.days, remind: r.remind ? r.remind.slice(0, 5) : '', created: r.created, archived: r.archived || null, updated: Date.parse(r.updated_at) };
+}
+function setLocalCount(day, id, n) {
+  const d = (state.log[day] = state.log[day] || {});
+  if (n > 0) d[id] = n; else delete d[id];
+  if (!Object.keys(d).length) delete state.log[day];
+}
+async function fetchAll(table, orderCols) {                // Supabase liefert max. 1000 Zeilen pro Abruf, daher seitenweise
+  const rows = [];
+  for (let from = 0; ; from += 1000) {
+    let q = sb.from(table).select('*').range(from, from + 999);
+    for (const c of orderCols) q = q.order(c);
+    const { data, error } = await q;
+    if (error) throw error;
+    rows.push(...data);
+    if (data.length < 1000) return rows;
+  }
+}
+function mergeFromCloud(habitRows, logRows) {
+  let changed = false;
+  const cHabits = new Map(habitRows.map((r) => [r.id, r]));
+  for (const r of habitRows) {
+    const local = state.habits.find((h) => h.id === r.id);
+    const cts = Date.parse(r.updated_at);
+    if (!local) { state.habits.push(habitFromCloud(r)); changed = true; }
+    else if (cts > lts(local.updated)) { Object.assign(local, habitFromCloud(r)); delete state.dirty.habits[local.id]; changed = true; }
+  }
+  for (const h of state.habits) {                           // lokal neuer oder in der Cloud unbekannt → hochladen
+    const r = cHabits.get(h.id);
+    if (!r || lts(h.updated) > Date.parse(r.updated_at)) state.dirty.habits[h.id] = 1;
+  }
+  const cLogs = new Map(logRows.map((r) => [logKey(r.day, r.habit_id), r]));
+  for (const r of logRows) {
+    const k = logKey(r.day, r.habit_id);
+    const cts = Date.parse(r.updated_at);
+    if (cts > lts(state.ts[k])) { setLocalCount(r.day, r.habit_id, r.count); state.ts[k] = cts; delete state.dirty.logs[k]; changed = true; }
+  }
+  const localKeys = new Set(Object.keys(state.ts));
+  for (const [day, m] of Object.entries(state.log)) for (const id of Object.keys(m)) localKeys.add(logKey(day, id));
+  for (const k of localKeys) {
+    const r = cLogs.get(k);
+    if (!r || lts(state.ts[k]) > Date.parse(r.updated_at)) state.dirty.logs[k] = 1;
+  }
+  return changed;
+}
+async function upsertChunks(table, rows, onConflict) {
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await sb.from(table).upsert(rows.slice(i, i + 500), { onConflict });
+    if (error) throw error;
+  }
+}
+async function pushDirty() {
+  const uid = cloud.user.id;
+  const hs = state.habits.filter((h) => state.dirty.habits[h.id]);
+  const ls = Object.keys(state.dirty.logs).map((k) => { const [day, id] = splitKey(k); return { k, day, id, ts: state.ts[k] || 0, count: count(day, id) }; });
+  await upsertChunks('habits', hs.map((h) => ({ user_id: uid, id: h.id, name: h.name, target: h.target, days: h.days, remind: h.remind || null, created: h.created, archived: h.archived || null, updated_at: msToIso(h.updated) })), 'user_id,id');
+  await upsertChunks('logs', ls.map((l) => ({ user_id: uid, day: l.day, habit_id: l.id, count: l.count, updated_at: msToIso(l.ts) })), 'user_id,day,habit_id');
+  const sent = {};                                          // nur löschen, was sich während des Hochladens nicht erneut geändert hat
+  hs.forEach((h) => { sent['h' + h.id] = h.updated; });
+  ls.forEach((l) => { sent['l' + l.k] = l.ts; });
+  for (const h of hs) if ((h.updated) === sent['h' + h.id] && state.dirty.habits[h.id]) delete state.dirty.habits[h.id];
+  for (const l of ls) if ((state.ts[l.k] || 0) === l.ts) delete state.dirty.logs[l.k];
+}
+let syncing = false, pending = null, pushTimer;
+async function runSync(full) {
+  if (!sb || !cloud.user) return;
+  if (syncing) { pending = pending || full; if (full) pending = true; return; }
+  syncing = true; cloud.sync = 'syncing'; cloud.lastAttempt = Date.now();
+  if (view === 'habits') render();
+  let changed = false;
+  try {
+    if (full) {
+      const [hr, lr] = await Promise.all([fetchAll('habits', ['id']), fetchAll('logs', ['day', 'habit_id'])]);
+      changed = mergeFromCloud(hr, lr);
+    }
+    await pushDirty();
+    cloud.sync = 'ok'; cloud.lastSync = Date.now();
+  } catch (e) {
+    cloud.sync = 'error';
+    console.warn('Sync fehlgeschlagen', e);
+  } finally {
+    syncing = false;
+    save();
+    if (changed || view === 'habits') render();
+    if (pending !== null) { const f = pending; pending = null; runSync(f); }
+  }
+}
+function queuePush() {                                      // Debounce: mehrere schnelle Taps werden gebündelt
+  if (!sb || !cloud.user) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => runSync(false), 1500);
+}
+const hasDirty = () => Object.keys(state.dirty.habits).length + Object.keys(state.dirty.logs).length > 0;
+if (sb) {
+  // Feuert beim Start (INITIAL_SESSION), nach Login/Logout und beim Token-Refresh.
+  sb.auth.onAuthStateChange((event, session) => {
+    const before = cloud.user ? cloud.user.id : null;
+    cloud.user = session ? session.user : null;
+    const now = cloud.user ? cloud.user.id : null;
+    if (before === now) return;                             // z. B. Token-Refresh: nichts neu zeichnen
+    cloud.sync = 'idle'; cloud.error = '';
+    if (view === 'habits') render();
+    if (now) setTimeout(() => runSync(true), 0);            // nicht direkt im Callback auf Supabase warten
+  });
+}
+
 /* ---------- Toast ---------- */
 let toastTimer;
-function toast(msg) {
+function toast(msg, type) {
   const t = $('#toast');
   t.textContent = msg;
+  t.classList.toggle('error', type === 'error');          // Fehlermeldungen sind immer rot (design-regeln.md R2.1)
   t.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 3200);
@@ -311,9 +499,13 @@ form.addEventListener('submit', (e) => {
   if (!days.length) days = [...WEEK];
   const remind = fRemind.value || '';
   if (editingId) {
-    Object.assign(state.habits.find((x) => x.id === editingId), { name, target, days, remind });
+    const h = state.habits.find((x) => x.id === editingId);
+    Object.assign(h, { name, target, days, remind });
+    touchHabit(h);
   } else {
-    state.habits.push({ id: 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, target, days, remind, created: todayKey(), archived: null });
+    const h = { id: 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, target, days, remind, created: todayKey(), archived: null };
+    state.habits.push(h);
+    touchHabit(h);
   }
   save();
   dlg.close();
@@ -326,7 +518,7 @@ $('#f-delete').addEventListener('click', (e) => {
   const b = e.currentTarget;
   if (!b.classList.contains('armed')) { b.classList.add('armed'); b.textContent = 'Wirklich löschen?'; return; }
   const h = state.habits.find((x) => x.id === editingId);
-  if (h) h.archived = todayKey();                          // Historie bleibt erhalten
+  if (h) { h.archived = todayKey(); touchHabit(h); }       // Historie bleibt erhalten
   save();
   dlg.close();
   render();
@@ -361,6 +553,8 @@ $('#view').addEventListener('click', (e) => {
     case 'new': openDialog(); break;
     case 'edit': openDialog(el.dataset.id); break;
     case 'notif': requestNotif(); break;
+    case 'sync': runSync(true).then(() => { if (cloud.sync === 'error') toast('Synchronisierung fehlgeschlagen', 'error'); }); break;
+    case 'logout': sb.auth.signOut().then(() => toast('Abgemeldet')); break;
     case 'export': exportData(); break;
     case 'import': $('#import-file').click(); break;
   }
@@ -399,17 +593,20 @@ $('#import-file').addEventListener('change', async (e) => {
     const d = j.data || j;
     if (!Array.isArray(d.habits) || typeof (d.log || {}) !== 'object') throw new Error('format');
     if (!confirm('Alle aktuellen Daten durch das Backup ersetzen?')) return;
-    state = { habits: d.habits, log: d.log || {}, notified: {} };
-    save(); render(); toast('Backup eingespielt');
-  } catch (err) { toast('Datei konnte nicht gelesen werden.'); }
+    state = { ...emptyState(), habits: d.habits, log: d.log || {} };
+    const now = Date.now();                                 // alles gilt als frisch geändert und wird hochgeladen
+    state.habits.forEach((h) => touchHabit(h, now));
+    for (const [day, m] of Object.entries(state.log)) for (const id of Object.keys(m)) { state.ts[day + '|' + id] = now; state.dirty.logs[day + '|' + id] = 1; }
+    save(); queuePush(); render(); toast('Backup eingespielt');
+  } catch (err) { toast('Datei konnte nicht gelesen werden.', 'error'); }
 });
 
 /* ---------- Erinnerungen ---------- */
 async function requestNotif() {
   try {
     const r = await Notification.requestPermission();
-    toast(r === 'granted' ? 'Erinnerungen aktiviert' : 'Nicht erlaubt');
-  } catch (e) { toast('Benachrichtigungen nicht möglich'); }
+    toast(r === 'granted' ? 'Erinnerungen aktiviert' : 'Nicht erlaubt', r === 'granted' ? undefined : 'error');
+  } catch (e) { toast('Benachrichtigungen nicht möglich', 'error'); }
   render();
 }
 async function notify(h) {
@@ -448,9 +645,11 @@ function tick() {
     render();
   }
   checkReminders();
+  if (cloud.user && hasDirty() && !syncing && Date.now() - cloud.lastAttempt > 60000) runSync(true);   // Wiederholung nach Fehler
 }
 setInterval(tick, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { tick(); runSync(true); } });
+window.addEventListener('online', () => runSync(true));
 
 /* ---------- Start ---------- */
 route();
