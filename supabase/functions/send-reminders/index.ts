@@ -124,12 +124,13 @@ Deno.serve(async (req) => {
     const due = dueOccurrences(habits ?? [], day, minutes, LATE_MIN);
     if (!due.length) continue;
 
-    const { data: logs } = await db.from('logs').select('day,habit_id,count')
+    const { data: logs } = await db.from('logs').select('day,habit_id,count,skip')
       .eq('user_id', uid).in('day', [...new Set(due.map((x) => x.occDay))]).in('habit_id', due.map((x) => x.h.id));
-    const done = new Map((logs ?? []).map((l) => [l.day + '|' + l.habit_id, l.count]));
+    const done = new Map((logs ?? []).map((l) => [l.day + '|' + l.habit_id, l]));
 
     for (const { h, occDay } of due) {
-      if ((done.get(occDay + '|' + h.id) ?? 0) >= h.target) continue; // Termin schon erledigt → keine Erinnerung
+      const l = done.get(occDay + '|' + h.id);
+      if (l && (l.skip || l.count >= h.target)) continue; // Termin erledigt oder übersprungen → keine Erinnerung
 
       // "Beanspruchen": nur wer die Zeile neu einfügt, darf senden. Schützt vor Doppelversand. day = Tag des Termins.
       const { data: claimed } = await db.from('reminders_sent')

@@ -37,6 +37,8 @@ const ICONS = {
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  trash: '<path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6"/>',
+  skip: '<polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/>',
   clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
   today: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
@@ -64,6 +66,7 @@ let habitsSub = 'list';                                     // Habits-Seite: 'li
 let draft = null;                                          // Formularentwurf (überlebt Neuzeichnen)
 let formErr = '';
 let deleteArmed = false;
+const foldOpen = { skip: false, done: false };               // Heute: aufgeklappte Bereiche bleiben beim Neuzeichnen offen
 
 // Uhrzeit + Vorlauf statt fester Erinnerungszeit: time = "HH:MM" oder '', before = Minuten vorher (0 = pünktlich) oder null (keine Erinnerung).
 function migrateHabits(list) {
@@ -93,13 +96,13 @@ const remindAt = (h) => {                                    // Uhrzeit der Erin
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 };
 // Sync-Felder: ts = Änderungszeit je Tageseintrag ("2026-11-17|habitId" → ms), dirty = noch nicht hochgeladene Änderungen.
-function emptyState() { return { habits: [], log: {}, ts: {}, dirty: { habits: {}, logs: {} }, notified: {} }; }
+function emptyState() { return { habits: [], log: {}, skip: {}, ts: {}, dirty: { habits: {}, logs: {} }, notified: {} }; }
 function load() {
   try {
     const r = JSON.parse(localStorage.getItem(KEY));
     if (r && Array.isArray(r.habits)) {
       const dirty = r.dirty || {};
-      return { habits: migrateHabits(r.habits), log: r.log || {}, ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {} }, notified: r.notified || {} };
+      return { habits: migrateHabits(r.habits), log: r.log || {}, skip: r.skip || {}, ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {} }, notified: r.notified || {} };
     }
   } catch (e) { /* leer starten */ }
   return emptyState();
@@ -109,14 +112,28 @@ function save() {
   catch (e) { toast('Speichern nicht möglich (Speicher voll oder gesperrt).', 'error'); }
 }
 
+/* ---------- Übersprungen: Gründe ----------
+   Wer einen Habit überspringt, nennt einen Grund. "excused" = entschuldigt: zählt weder als nicht geschafft
+   noch in die Quote. Alle anderen Gründe zählen als nicht geschafft. Nur Krankheit ist entschuldigt. */
+const REASONS = [
+  { id: 'sick', label: 'Krankheit', note: 'Zählt nicht zur Quote', excused: true },
+  { id: 'vacation', label: 'Urlaub / Reise', note: 'Zählt als nicht geschafft' },
+  { id: 'time', label: 'Keine Zeit', note: 'Zählt als nicht geschafft' },
+  { id: 'other', label: 'Sonstiges', note: 'Zählt als nicht geschafft' },
+];
+const reasonOf = (id) => REASONS.find((r) => r.id === id);
+const skipOf = (k, id) => (state.skip[k] && state.skip[k][id]) || null;
+const isExcused = (k, id) => { const r = reasonOf(skipOf(k, id)); return !!(r && r.excused); };
+
 /* ---------- Logik ---------- */
 function scheduled(k) {
   const wd = parse(k).getDay();
   return state.habits.filter((h) => h.days.includes(wd) && h.created <= k && (!h.archived || h.archived > k));
 }
 const count = (k, id) => (state.log[k] && state.log[k][id]) || 0;
+const counted = (k) => scheduled(k).filter((h) => !isExcused(k, h.id));   // entschuldigte (krank) zählen nicht
 function dayPct(k) {
-  const hs = scheduled(k);
+  const hs = counted(k);
   if (!hs.length) return null;
   const sum = hs.reduce((a, h) => a + Math.min(count(k, h.id) / h.target, 1), 0);
   return Math.round((sum / hs.length) * 100);
@@ -133,6 +150,19 @@ function setCount(k, h, n) {
   queuePush();
   render();
   announce(h.target === 1 ? `${h.name}: ${n ? 'erledigt' : 'offen'}` : `${h.name}: ${n} von ${h.target}${n >= h.target ? ', erledigt' : ''}`);
+}
+function setSkip(k, h, reason) {                            // reason = Grund-ID oder null (Überspringen aufheben)
+  const day = (state.skip[k] = state.skip[k] || {});
+  if (reason) day[h.id] = reason; else delete day[h.id];
+  if (!Object.keys(day).length) delete state.skip[k];
+  const tk = k + '|' + h.id;                                 // Zählstand und Grund teilen sich eine Cloud-Zeile
+  state.ts[tk] = Date.now();
+  state.dirty.logs[tk] = 1;
+  save();
+  queuePush();
+  render();
+  const r = reasonOf(reason);
+  announce(reason ? `${h.name}: übersprungen, ${r ? r.label : reason}` : `${h.name}: wieder offen`);
 }
 // Da die Ansicht komplett neu gerendert wird, melden wir Änderungen über eine dauerhafte Live-Region an Screenreader.
 function announce(msg) {
@@ -194,9 +224,9 @@ function heroHTML(pct, sub, streakN) {
   const streakHTML = streakN === null ? '' :
     `<div class="hero-streak ${streakN ? '' : 'off'}" role="img" aria-label="Serie: ${streakN} ${streakN === 1 ? 'Tag' : 'Tage'} in Folge"><span class="fire" aria-hidden="true">🔥</span><strong aria-hidden="true">${streakN}</strong></div>`;
   return `<section class="hero" aria-label="Tagesübersicht">
-    <div class="hero-main"><div class="hero-pct">${pct}<span>%</span></div><div class="hero-sub">${sub}</div></div>
+    <div class="hero-main"><div class="hero-pct">${pct === null ? '–' : `${pct}<span>%</span>`}</div><div class="hero-sub">${sub}</div></div>
     ${streakHTML}
-    <div class="hero-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="Fortschritt"><i data-pct="${pct}" style="transform:scaleX(${lastPct / 100})"></i></div>
+    <div class="hero-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" ${pct === null ? '' : `aria-valuenow="${pct}"`} aria-label="Fortschritt"><i data-pct="${pct ?? 0}" style="transform:scaleX(${lastPct / 100})"></i></div>
   </section>`;
 }
 function animateBar() {
@@ -212,8 +242,9 @@ function todayHTML() {
   const isToday = k === todayKey();
   const isFuture = k > todayKey();
   const hs = scheduled(k);
-  const pct = dayPct(k) ?? 0;
-  const done = hs.filter((h) => count(k, h.id) >= h.target).length;
+  const cs = counted(k);
+  const pct = dayPct(k);
+  const doneCount = cs.filter((h) => count(k, h.id) >= h.target).length;
 
   const head = `<header class="page-head">
     <button class="icon-btn" data-action="day-prev" aria-label="Vorheriger Tag">${icon('left')}</button>
@@ -230,29 +261,63 @@ function todayHTML() {
   }
 
   const backBtn = isToday ? '' : `<button class="btn block" data-action="go-today" style="margin-bottom:16px">Zurück zu heute</button>`;
-  const hero = heroHTML(pct, hs.length ? `${done} von ${hs.length} erledigt` : 'Nichts geplant', streak());
-  const list = hs.length
-    ? `<ul class="list">${hs.map((h) => habitRow(k, h, isFuture)).join('')}</ul>`
-    : `<div class="empty"><h2>Für diesen Tag ist nichts geplant</h2><p>Heute ist Pause.</p></div>`;
-  return `<div class="view-in">${head}${backBtn}${hero}${list}</div>`;
+  const sub = cs.length ? `${doneCount} von ${cs.length} erledigt` : hs.length ? 'Alles übersprungen' : 'Nichts geplant';
+  const hero = heroHTML(pct, sub, streak());
+
+  const open = [], skipped = [], done = [];
+  for (const h of hs) { if (skipOf(k, h.id)) skipped.push(h); else if (count(k, h.id) >= h.target) done.push(h); else open.push(h); }
+  const canSwipe = !isFuture;
+
+  let main;
+  if (!hs.length) main = `<div class="empty"><h2>Für diesen Tag ist nichts geplant</h2><p>Heute ist Pause.</p></div>`;
+  else if (open.length) main = `<ul class="list">${open.map((h) => habitRow(k, h, isFuture, canSwipe)).join('')}</ul>${canSwipe ? `<p class="hint swipe-hint">Nach links wischen löscht, nach rechts überspringt.</p>` : ''}`;
+  else main = `<div class="empty compact"><h2>Nichts mehr offen</h2><p>Gut gemacht.</p></div>`;
+
+  const folds = foldHTML('skip', 'Übersprungen', skipped, (h) => skippedRow(k, h, isFuture)) + foldHTML('done', 'Erledigt', done, (h) => habitRow(k, h, isFuture, false));
+  return `<div class="view-in">${head}${backBtn}${hero}${main}${folds}</div>`;
 }
 
-function habitRow(k, h, disabled) {
+// Einklappbarer Bereich ("Übersprungen", "Erledigt"): standardmäßig zu, der Zustand bleibt beim Neuzeichnen erhalten.
+function foldHTML(id, title, items, rowFn) {
+  if (!items.length) { foldOpen[id] = false; return ''; }   // leerer Bereich verschwindet und startet beim nächsten Mal wieder zugeklappt
+  return `<details class="fold" data-fold="${id}" ${foldOpen[id] ? 'open' : ''}>
+    <summary><span>${title}</span><span class="count-badge">${items.length}</span>${icon('right', 'chev')}</summary>
+    <ul class="list">${items.map(rowFn).join('')}</ul></details>`;
+}
+
+function habitInner(k, h, disabled) {
   const c = count(k, h.id);
   const isDone = c >= h.target;
   const meta = h.time ? `${icon('clock')} ${esc(h.time)}${h.before !== null ? `${icon('bell')}<span class="sr">, mit Erinnerung</span>` : ''}` : '';
   const info = `<div class="info"><div class="name">${esc(h.name)}</div>${meta ? `<div class="meta">${meta}</div>` : ''}</div>`;
   const check = `<span class="check" aria-hidden="true">${icon('check')}</span>`;
   if (h.target === 1) {
-    return `<li><button class="habit ${isDone ? 'done' : ''}" data-action="toggle" data-id="${h.id}" data-fid="t-${h.id}" aria-pressed="${isDone}" ${disabled ? 'disabled' : ''}>
-      ${check}${info}</button></li>`;
+    return `<button class="habit ${isDone ? 'done' : ''}" data-action="toggle" data-id="${h.id}" data-fid="t-${h.id}" aria-pressed="${isDone}" ${disabled ? 'disabled' : ''}>${check}${info}</button>`;
   }
-  return `<li><div class="habit ${isDone ? 'done' : ''}">${check}${info}
+  return `<div class="habit ${isDone ? 'done' : ''}">${check}${info}
     <div class="counter">
       <button class="icon-btn" data-action="dec" data-id="${h.id}" data-fid="d-${h.id}" aria-label="${esc(h.name)}: eins weniger" ${c === 0 || disabled ? 'disabled' : ''}>${icon('minus')}</button>
       <span class="count">${c}<span class="sr"> von </span><span aria-hidden="true">/</span>${h.target}</span>
       <button class="icon-btn add" data-action="inc" data-id="${h.id}" data-fid="i-${h.id}" aria-label="${esc(h.name)}: eins mehr" ${isDone || disabled ? 'disabled' : ''}>${icon('plus')}</button>
-    </div></div></li>`;
+    </div></div>`;
+}
+function habitRow(k, h, disabled, swipe) {
+  return swipe ? swipeRow(h, habitInner(k, h, disabled), true) : `<li>${habitInner(k, h, disabled)}</li>`;
+}
+// Zeile zum Wischen: nach links = löschen (rot), nach rechts = überspringen (nur wenn skip = true).
+// Dazu zwei Knöpfe, die erst beim Tastatur-Fokus sichtbar sind (Alternative zur Wischgeste, auch für Screenreader).
+function swipeRow(h, inner, skip) {
+  return `<li class="swipe" data-id="${h.id}" data-right="${skip ? 1 : 0}">
+    ${skip ? `<div class="swipe-bg skip" aria-hidden="true">${icon('skip')}</div>` : ''}
+    <div class="swipe-bg del" aria-hidden="true">${icon('trash')}</div>
+    <div class="swipe-front">${inner}</div>
+    <div class="swipe-alt">${skip ? `<button type="button" class="sr-btn" data-action="skip-ask" data-id="${h.id}">${esc(h.name)} überspringen</button>` : ''}<button type="button" class="sr-btn" data-action="del-ask" data-id="${h.id}">${esc(h.name)} löschen</button></div></li>`;
+}
+function skippedRow(k, h, disabled) {
+  const r = reasonOf(skipOf(k, h.id));
+  return `<li><div class="habit skipped"><span class="check skip-mark" aria-hidden="true">${icon('skip')}</span>
+    <div class="info"><div class="name">${esc(h.name)}</div><div class="meta">${esc(r ? r.label : skipOf(k, h.id))}${r && r.excused ? ' · zählt nicht zur Quote' : ''}</div></div>
+    <button type="button" class="btn ghost small" data-action="unskip" data-id="${h.id}" data-fid="u-${h.id}" ${disabled ? 'disabled' : ''}>Rückgängig</button></div></li>`;
 }
 
 function calendarHTML() {
@@ -304,13 +369,21 @@ function reportHTML() {
   const d = parse(k);
   const isToday = k === todayKey();
   const hs = scheduled(k);
-  const pct = dayPct(k) ?? 0;
-  const ok = hs.filter((h) => count(k, h.id) >= h.target);
-  const miss = hs.filter((h) => count(k, h.id) < h.target);
-  const row = (h, cls) => `<li class="rep-row ${cls}"><span class="mark" aria-hidden="true">${icon(cls === 'ok' ? 'check' : 'x')}</span>
-    <div class="info"><div class="name">${esc(h.name)}</div></div><span class="val">${count(k, h.id)} von ${h.target}</span></li>`;
+  const cs = counted(k);
+  const pct = dayPct(k);
+  const skipped = hs.filter((h) => skipOf(k, h.id));
+  const ok = hs.filter((h) => !skipOf(k, h.id) && count(k, h.id) >= h.target);
+  const miss = hs.filter((h) => !skipOf(k, h.id) && count(k, h.id) < h.target);
+  const okCounted = cs.filter((h) => count(k, h.id) >= h.target).length;
+  const row = (h, cls) => {
+    const r = reasonOf(skipOf(k, h.id));
+    const val = cls === 'skip' ? esc(r ? r.label : skipOf(k, h.id)) : `${count(k, h.id)} von ${h.target}`;
+    return `<li class="rep-row ${cls}"><span class="mark" aria-hidden="true">${icon(cls === 'ok' ? 'check' : cls === 'skip' ? 'skip' : 'x')}</span>
+    <div class="info"><div class="name">${esc(h.name)}</div></div><span class="val">${val}</span></li>`;
+  };
   const group = (id, title, items, cls) => items.length
     ? `<section class="group" aria-labelledby="${id}"><h2 id="${id}">${title} <span class="count-badge">${items.length}</span></h2><ul class="list">${items.map((h) => row(h, cls)).join('')}</ul></section>` : '';
+  const sub = cs.length ? `${okCounted} von ${cs.length} erledigt` : hs.length ? 'Alles übersprungen' : 'Nichts geplant';
 
   return `<div class="view-in">
     <a class="back" href="#kalender">${icon('left')} Kalender</a>
@@ -319,8 +392,8 @@ function reportHTML() {
       <div class="titles"><h1>${esc(fmt({ weekday: 'long' }).format(d))}</h1><p>${esc(fmt({ day: 'numeric', month: 'long', year: 'numeric' }).format(d))}</p></div>
       <button class="icon-btn" data-action="rep-next" aria-label="Nächster Tag" ${isToday ? 'disabled' : ''}>${icon('right')}</button>
     </header>
-    ${heroHTML(pct, hs.length ? `${ok.length} von ${hs.length} erledigt` : 'Nichts geplant', null)}
-    ${hs.length ? group('g-ok', 'Abgeschlossen', ok, 'ok') + group('g-miss', isToday ? 'Noch offen' : 'Versäumt', miss, 'miss')
+    ${heroHTML(pct, sub, null)}
+    ${hs.length ? group('g-ok', 'Abgeschlossen', ok, 'ok') + group('g-miss', isToday ? 'Noch offen' : 'Versäumt', miss, 'miss') + group('g-skip', 'Übersprungen', skipped, 'skip')
       : '<div class="empty"><h2>Für diesen Tag war nichts geplant</h2></div>'}
     <div class="report-actions"><button class="btn" data-action="edit-day" data-date="${k}">${isToday ? 'Zu Heute' : 'Tag nachtragen oder ändern'}</button></div>
   </div>`;
@@ -408,9 +481,13 @@ function habitsHTML() {
   let body;
   if (habitsSub === 'list') {
     body = hs.length
-      ? `<ul class="list">${hs.map((h) => `<li><a class="card-row" href="#bearbeiten/${h.id}" data-fid="e-${h.id}">
+      ? `<ul class="list">${hs.map((h) => `<li class="swipe" data-id="${h.id}" data-right="0">
+          <div class="swipe-bg del" aria-hidden="true">${icon('trash')}</div>
+          <div class="swipe-front"><a class="card-row" draggable="false" href="#bearbeiten/${h.id}" data-fid="e-${h.id}">
           <div class="info"><div class="name">${esc(h.name)}</div>
-          <div class="meta">${h.target > 1 ? `Ziel ${h.target} · ` : ''}${daysLabel(h.days)}${h.time ? ` · ${esc(h.time)} Uhr` : ''}</div></div>${icon('right')}</a></li>`).join('')}</ul>`
+          <div class="meta">${h.target > 1 ? `Ziel ${h.target} · ` : ''}${daysLabel(h.days)}${h.time ? ` · ${esc(h.time)} Uhr` : ''}</div></div>${icon('right')}</a></div>
+          <div class="swipe-alt"><button type="button" class="sr-btn" data-action="del-ask" data-id="${h.id}">${esc(h.name)} löschen</button></div></li>`).join('')}</ul>
+        <p class="hint swipe-hint">Nach links wischen löscht.</p>`
       : `<div class="empty"><h2>Noch nichts angelegt</h2><p>Tippe unten auf „Neu“, um deine erste Gewohnheit zu erstellen.</p></div>`;
   } else {
     const rs = hs.filter((h) => h.time && h.before !== null).sort((a, b) => remindAt(a).localeCompare(remindAt(b)));
@@ -540,6 +617,11 @@ async function fetchAll(table, orderCols) {                // Supabase liefert m
     if (data.length < 1000) return rows;
   }
 }
+function setLocalSkip(day, id, reason) {
+  const d = (state.skip[day] = state.skip[day] || {});
+  if (reason) d[id] = reason; else delete d[id];
+  if (!Object.keys(d).length) delete state.skip[day];
+}
 function mergeFromCloud(habitRows, logRows) {
   let changed = false;
   const cHabits = new Map(habitRows.map((r) => [r.id, r]));
@@ -557,10 +639,11 @@ function mergeFromCloud(habitRows, logRows) {
   for (const r of logRows) {
     const k = logKey(r.day, r.habit_id);
     const cts = Date.parse(r.updated_at);
-    if (cts > lts(state.ts[k])) { setLocalCount(r.day, r.habit_id, r.count); state.ts[k] = cts; delete state.dirty.logs[k]; changed = true; }
+    if (cts > lts(state.ts[k])) { setLocalCount(r.day, r.habit_id, r.count); setLocalSkip(r.day, r.habit_id, r.skip); state.ts[k] = cts; delete state.dirty.logs[k]; changed = true; }
   }
   const localKeys = new Set(Object.keys(state.ts));
   for (const [day, m] of Object.entries(state.log)) for (const id of Object.keys(m)) localKeys.add(logKey(day, id));
+  for (const [day, m] of Object.entries(state.skip)) for (const id of Object.keys(m)) localKeys.add(logKey(day, id));
   for (const k of localKeys) {
     const r = cLogs.get(k);
     if (!r || lts(state.ts[k]) > Date.parse(r.updated_at)) state.dirty.logs[k] = 1;
@@ -576,9 +659,9 @@ async function upsertChunks(table, rows, onConflict) {
 async function pushDirty() {
   const uid = cloud.user.id;
   const hs = state.habits.filter((h) => state.dirty.habits[h.id]);
-  const ls = Object.keys(state.dirty.logs).map((k) => { const [day, id] = splitKey(k); return { k, day, id, ts: state.ts[k] || 0, count: count(day, id) }; });
+  const ls = Object.keys(state.dirty.logs).map((k) => { const [day, id] = splitKey(k); return { k, day, id, ts: state.ts[k] || 0, count: count(day, id), skip: skipOf(day, id) }; });
   await upsertChunks('habits', hs.map((h) => ({ user_id: uid, id: h.id, name: h.name, target: h.target, days: h.days, at_time: h.time || null, remind_before: h.time && h.before != null ? h.before : null, remind: null, created: h.created, archived: h.archived || null, updated_at: msToIso(h.updated) })), 'user_id,id');
-  await upsertChunks('logs', ls.map((l) => ({ user_id: uid, day: l.day, habit_id: l.id, count: l.count, updated_at: msToIso(l.ts) })), 'user_id,day,habit_id');
+  await upsertChunks('logs', ls.map((l) => ({ user_id: uid, day: l.day, habit_id: l.id, count: l.count, skip: l.skip, updated_at: msToIso(l.ts) })), 'user_id,day,habit_id');
   const sent = {};                                          // nur löschen, was sich während des Hochladens nicht erneut geändert hat
   hs.forEach((h) => { sent['h' + h.id] = h.updated; });
   ls.forEach((l) => { sent['l' + l.k] = l.ts; });
@@ -628,16 +711,91 @@ if (sb) {
   });
 }
 
-/* ---------- Toast ---------- */
-let toastTimer;
-function toast(msg, type) {
+/* ---------- Toast (optional mit Aktion, z. B. "Wiederherstellen") ---------- */
+let toastTimer, toastAction = null;
+function toast(msg, type, action) {
   const t = $('#toast');
+  toastAction = action || null;
   t.textContent = msg;
+  if (action) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'toast-btn'; b.dataset.toastAction = ''; b.textContent = action.label;
+    t.append(b);
+  }
   t.classList.toggle('error', type === 'error');          // Fehlermeldungen sind immer rot (design-regeln.md R2.1)
+  t.classList.toggle('has-action', !!action);
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), 3200);
+  toastTimer = setTimeout(hideToast, action ? 6000 : 3200);
 }
+function hideToast() { $('#toast').classList.remove('show', 'has-action'); toastAction = null; }
+$('#toast').addEventListener('click', (e) => {
+  if (!e.target.closest('[data-toast-action]') || !toastAction) return;
+  const a = toastAction; hideToast(); a.run();
+});
+
+/* ---------- Löschen, Überspringen, Dialoge (unten eingeblendet) ---------- */
+const sheet = $('#sheet');
+let sheetCtx = null;
+function openSheet(html) {
+  sheet.innerHTML = html;
+  if (!sheet.open) sheet.showModal();
+  const h2 = sheet.querySelector('h2');                      // Fokus auf die Überschrift statt auf den ersten Knopf: nichts wirkt vorausgewählt
+  if (h2) { h2.tabIndex = -1; h2.focus(); }
+}
+function closeSheet() { if (sheet.open) sheet.close(); }
+sheet.addEventListener('click', (e) => {
+  if (e.target === sheet) { closeSheet(); return; }          // Tippen neben das Blatt schließt es
+  const b = e.target.closest('[data-sheet]');
+  if (!b || !sheetCtx) return;
+  const h = state.habits.find((x) => x.id === sheetCtx.id);
+  const { k } = sheetCtx;
+  closeSheet();
+  if (!h) return;
+  if (b.dataset.sheet === 'confirm-delete') removeHabit(h);
+  if (b.dataset.sheet === 'reason') {
+    setSkip(k, h, b.dataset.reason);
+    const r = reasonOf(b.dataset.reason);
+    toast(`„${h.name}“ übersprungen (${r ? r.label : b.dataset.reason})`, undefined, { label: 'Rückgängig', run: () => setSkip(k, h, null) });
+  }
+});
+const ageDays = (h) => Math.round((parse(todayKey()) - parse(h.created)) / 864e5);
+function requestDelete(id) {
+  const h = state.habits.find((x) => x.id === id);
+  if (!h || h.archived) return;
+  if (ageDays(h) > 1) {                                      // älter als 1 Tag → erst nachfragen
+    sheetCtx = { id, k: key(viewDate) };
+    openSheet(`<h2 id="sheet-title">„${esc(h.name)}“ löschen?</h2>
+      <p class="sheet-text">Vergangene Tage bleiben im Kalender erhalten. Direkt danach kannst du das Löschen rückgängig machen.</p>
+      <button type="button" class="btn danger armed block" data-sheet="confirm-delete">Löschen</button>
+      <button type="button" class="btn ghost block" data-sheet="close">Abbrechen</button>`);
+  } else removeHabit(h);
+}
+function removeHabit(h, rerender = true) {
+  h.archived = todayKey(); touchHabit(h);                    // Historie bleibt erhalten
+  save();
+  if (rerender) render();
+  toast(`„${h.name}“ gelöscht`, undefined, { label: 'Wiederherstellen', run: () => restoreHabit(h.id) });
+}
+function restoreHabit(id) {
+  const h = state.habits.find((x) => x.id === id);
+  if (!h) return;
+  h.archived = null; touchHabit(h);
+  save(); render();
+  toast('Wiederhergestellt');
+}
+function askSkip(id) {
+  const h = state.habits.find((x) => x.id === id);
+  if (!h) return;
+  sheetCtx = { id, k: key(viewDate) };
+  openSheet(`<h2 id="sheet-title">Warum überspringst du „${esc(h.name)}“?</h2>
+    <div class="reasons">${REASONS.map((r) => `<button type="button" class="reason ${r.excused ? 'excused' : ''}" data-sheet="reason" data-reason="${r.id}"><strong>${r.label}</strong><span>${r.note}</span></button>`).join('')}</div>
+    <button type="button" class="btn ghost block" data-sheet="close">Abbrechen</button>`);
+}
+$('#view').addEventListener('toggle', (e) => {               // aufgeklappt/zugeklappt merken
+  const d = e.target;
+  if (d.matches && d.matches('details.fold')) foldOpen[d.dataset.fold] = d.open;
+}, true);
 
 /* ---------- Formular-Logik (Neu / Bearbeiten) ---------- */
 function submitHabit() {
@@ -679,10 +837,8 @@ function submitHabit() {
 function deleteHabit() {
   if (!deleteArmed) { deleteArmed = true; render(); return; }  // erst nachfragen
   const h = state.habits.find((x) => x.id === editingId);
-  if (h) { h.archived = todayKey(); touchHabit(h); }           // Historie bleibt erhalten
-  save();
   draft = null; deleteArmed = false;
-  toast('Gelöscht. Frühere Tage bleiben im Kalender erhalten.');
+  if (h) removeHabit(h, false);
   location.hash = '#gewohnheiten';
 }
 function onFormInput(e) {
@@ -725,6 +881,9 @@ $('#view').addEventListener('click', (e) => {
     case 'toggle': setCount(k, h, count(k, h.id) >= h.target ? 0 : h.target); break;
     case 'inc': setCount(k, h, count(k, h.id) + 1); break;
     case 'dec': setCount(k, h, count(k, h.id) - 1); break;
+    case 'unskip': setSkip(k, h, null); break;
+    case 'skip-ask': askSkip(el.dataset.id); break;
+    case 'del-ask': requestDelete(el.dataset.id); break;
     case 'day-prev': viewDate = addDays(viewDate, -1); render(); break;
     case 'day-next': viewDate = addDays(viewDate, 1); render(); break;
     case 'go-today': viewDate = new Date(); render(); break;
@@ -744,6 +903,52 @@ $('#view').addEventListener('click', (e) => {
     case 'import': $('#import-file').click(); break;
   }
 });
+/* ---------- Wischen: links = löschen, rechts = überspringen ----------
+   Läuft über Pointer-Events (Finger und Maus). touch-action: pan-y lässt senkrechtes Scrollen dem Browser.
+   Ab SW_THRESH Pixeln gilt die Geste als "weit genug": beim Loslassen wird die Aktion ausgelöst. */
+const SW_THRESH = 96, SW_MAX = 150, SW_LOCK = 10;
+let sw = null, swSuppress = false;
+$('#view').addEventListener('pointerdown', (e) => {
+  const li = e.target.closest('.swipe');
+  if (!li || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  if (e.target.closest('input, select, textarea, summary, .swipe-alt')) return;
+  sw = { li, front: li.querySelector('.swipe-front'), x: e.clientX, y: e.clientY, pid: e.pointerId, locked: false, dx: 0, right: li.dataset.right === '1' };
+});
+window.addEventListener('pointermove', (e) => {
+  if (!sw || e.pointerId !== sw.pid) return;
+  const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+  if (!sw.locked) {
+    if (Math.abs(dy) > SW_LOCK && Math.abs(dy) > Math.abs(dx)) { sw = null; return; }   // senkrecht = Scrollen, nicht wischen
+    if (Math.abs(dx) < SW_LOCK) return;
+    sw.locked = true;
+    sw.li.classList.add('dragging');
+    try { sw.li.setPointerCapture(e.pointerId); } catch (_) { /* egal */ }
+  }
+  const x = Math.max(-SW_MAX, Math.min(sw.right ? SW_MAX : 0, dx));
+  sw.dx = x;
+  sw.front.style.transform = `translateX(${x}px)`;
+  sw.li.dataset.dir = x < 0 ? 'left' : x > 0 ? 'right' : '';
+  sw.li.classList.toggle('armed', Math.abs(x) >= SW_THRESH);
+});
+function endSwipe(e, cancelled) {
+  if (!sw || e.pointerId !== sw.pid) return;
+  const s = sw; sw = null;
+  if (!s.locked) return;
+  swSuppress = true; setTimeout(() => { swSuppress = false; }, 60);   // der Klick nach dem Wischen soll nichts auslösen
+  s.li.classList.remove('dragging');
+  const id = s.li.dataset.id;
+  const reset = () => { s.front.style.transform = ''; s.li.classList.remove('armed'); s.li.dataset.dir = ''; };
+  if (cancelled || Math.abs(s.dx) < SW_THRESH) { reset(); return; }
+  if (s.dx > 0) { reset(); askSkip(id); return; }
+  const h = state.habits.find((x) => x.id === id);
+  if (h && ageDays(h) > 1) { reset(); requestDelete(id); return; }   // Bestätigung nötig → Zeile bleibt, Dialog erscheint
+  s.front.style.transform = 'translateX(-110%)';                     // sonst herausgleiten lassen und löschen
+  setTimeout(() => requestDelete(id), 170);
+}
+window.addEventListener('pointerup', (e) => endSwipe(e, false));
+window.addEventListener('pointercancel', (e) => endSwipe(e, true));
+$('#view').addEventListener('click', (e) => { if (swSuppress) { e.preventDefault(); e.stopPropagation(); } }, true);
+
 function shiftMonth(n) {
   const d = new Date(calMonth.y, calMonth.m + n, 1);
   return { y: d.getFullYear(), m: d.getMonth() };
@@ -796,10 +1001,10 @@ $('#import-file').addEventListener('change', async (e) => {
     const d = j.data || j;
     if (!Array.isArray(d.habits) || typeof (d.log || {}) !== 'object') throw new Error('format');
     if (!confirm('Alle aktuellen Daten durch das Backup ersetzen?')) return;
-    state = { ...emptyState(), habits: migrateHabits(d.habits), log: d.log || {} };
+    state = { ...emptyState(), habits: migrateHabits(d.habits), log: d.log || {}, skip: d.skip || {} };
     const now = Date.now();                                 // alles gilt als frisch geändert und wird hochgeladen
     state.habits.forEach((h) => touchHabit(h, now));
-    for (const [day, m] of Object.entries(state.log)) for (const id of Object.keys(m)) { state.ts[day + '|' + id] = now; state.dirty.logs[day + '|' + id] = 1; }
+    for (const src of [state.log, state.skip]) for (const [day, m] of Object.entries(src)) for (const id of Object.keys(m)) { state.ts[day + '|' + id] = now; state.dirty.logs[day + '|' + id] = 1; }
     save(); queuePush(); render(); toast('Backup eingespielt');
   } catch (err) { toast('Datei konnte nicht gelesen werden.', 'error'); }
 });
