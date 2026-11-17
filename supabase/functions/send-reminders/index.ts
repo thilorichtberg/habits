@@ -34,6 +34,43 @@ function localParts(tz: string, now = new Date()) {
   };
 }
 
+// --- Fälligkeit (rein rechnerisch, wird getestet) ---
+const dayNum = (d: string) => { const [y, m, dd] = d.split('-').map(Number); return Math.round(Date.UTC(y, m - 1, dd) / 86400000); };
+const dayStr = (n: number) => new Date(n * 86400000).toISOString().slice(0, 10);
+const dayWeekday = (n: number) => new Date(n * 86400000).getUTCDay();
+
+// Welche Termine (Habit + Tag) lösen JETZT eine Erinnerung aus?
+// Ein Termin ist "Tag + Uhrzeit des Habits". Erinnert wird "Vorlauf" Minuten davor, auch am Vortag oder früher
+// (zum Beispiel 33 Stunden vorher). Gerechnet wird in Ortszeit-Minuten der Zeitzone des Geräts; die Zeitumstellung
+// wird dabei nicht berücksichtigt (an dem einen Tag kann eine Erinnerung mit langem Vorlauf um eine Stunde abweichen).
+function dueOccurrences(habits: any[], day: string, minutes: number, lateMin = 10) {
+  const todayN = dayNum(day);
+  const nowMin = todayN * 1440 + minutes;
+  const out = [] as any[];
+  for (const h of habits) {
+    const [H, M] = h.at_time.split(':').map(Number);
+    const lead = h.remind_before;
+    // Bei "x Minuten vorher" nie nach der Uhrzeit selbst erinnern, bei "zur Uhrzeit" noch lateMin Minuten lang.
+    const window = lead > 0 ? Math.min(lateMin, lead) : lateMin;
+    for (let k = 0; k <= Math.floor(lead / 1440) + 2; k++) {
+      const n = todayN + k;
+      const occDay = dayStr(n);
+      if (!h.days.includes(dayWeekday(n))) continue;
+      if (h.created > occDay) continue;
+      if (h.archived && h.archived <= occDay) continue;
+      const late = nowMin - (n * 1440 + H * 60 + M - lead);
+      if (late >= 0 && late <= window) out.push({ h, occDay });
+    }
+  }
+  return out;
+}
+// --- Ende Fälligkeit ---
+
+const fmtLead = (b: number) => {
+  const d = Math.floor(b / 1440), h = Math.floor((b % 1440) / 60), m = b % 60;
+  return [d && `${d} ${d === 1 ? 'Tag' : 'Tage'}`, h && `${h} ${h === 1 ? 'Stunde' : 'Stunden'}`, m && `${m} ${m === 1 ? 'Minute' : 'Minuten'}`].filter(Boolean).join(' ');
+};
+
 const json = (o: unknown, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { 'Content-Type': 'application/json' } });
 
@@ -78,38 +115,37 @@ Deno.serve(async (req) => {
 
   let sent = 0;
   for (const [uid, list] of byUser) {
-    const { day, minutes, weekday } = localParts(list[0].tz);
+    const { day, minutes } = localParts(list[0].tz);
 
     const { data: habits } = await db.from('habits')
-      .select('id,name,target,days,remind,created,archived')
-      .eq('user_id', uid).not('remind', 'is', null).lte('created', day);
+      .select('id,name,target,days,at_time,remind_before,created,archived')
+      .eq('user_id', uid).not('at_time', 'is', null).not('remind_before', 'is', null).lte('created', day);
 
-    const due = (habits ?? []).filter((h) => {
-      if (!h.days.includes(weekday)) return false;
-      if (h.archived && h.archived <= day) return false;
-      const [H, M] = h.remind.split(':').map(Number);
-      const late = minutes - (H * 60 + M);
-      return late >= 0 && late <= LATE_MIN;
-    });
+    const due = dueOccurrences(habits ?? [], day, minutes, LATE_MIN);
     if (!due.length) continue;
 
-    const { data: logs } = await db.from('logs').select('habit_id,count')
-      .eq('user_id', uid).eq('day', day).in('habit_id', due.map((h) => h.id));
-    const done = new Map((logs ?? []).map((l) => [l.habit_id, l.count]));
+    const { data: logs } = await db.from('logs').select('day,habit_id,count')
+      .eq('user_id', uid).in('day', [...new Set(due.map((x) => x.occDay))]).in('habit_id', due.map((x) => x.h.id));
+    const done = new Map((logs ?? []).map((l) => [l.day + '|' + l.habit_id, l.count]));
 
-    for (const h of due) {
-      if ((done.get(h.id) ?? 0) >= h.target) continue; // schon erledigt → keine Erinnerung
+    for (const { h, occDay } of due) {
+      if ((done.get(occDay + '|' + h.id) ?? 0) >= h.target) continue; // Termin schon erledigt → keine Erinnerung
 
-      // "Beanspruchen": nur wer die Zeile neu einfügt, darf senden. Schützt vor Doppelversand.
+      // "Beanspruchen": nur wer die Zeile neu einfügt, darf senden. Schützt vor Doppelversand. day = Tag des Termins.
       const { data: claimed } = await db.from('reminders_sent')
-        .upsert({ user_id: uid, day, habit_id: h.id }, { onConflict: 'user_id,day,habit_id', ignoreDuplicates: true })
+        .upsert({ user_id: uid, day: occDay, habit_id: h.id }, { onConflict: 'user_id,day,habit_id', ignoreDuplicates: true })
         .select();
       if (!claimed?.length) continue;
 
+      const t = String(h.at_time).slice(0, 5);
+      const b = h.remind_before;
+      const when = occDay === day ? 'um '
+        : occDay === dayStr(dayNum(day) + 1) ? 'morgen um '
+        : `am ${new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(dayNum(occDay) * 86400000))} um `;
       const payload = JSON.stringify({
         title: h.name,
-        body: h.target > 1 ? `Ziel heute: ${h.target}×` : 'Noch offen für heute.',
-        tag: 'habit-' + h.id,
+        body: (b > 0 ? `In ${fmtLead(b)}, ${when}${t} Uhr.` : `Jetzt, ${t} Uhr.`) + (h.target > 1 ? ` Ziel: ${h.target}×` : ''),
+        tag: 'habit-' + h.id + '-' + occDay,
       });
       for (const s of list) sent += await send(s, payload);
     }

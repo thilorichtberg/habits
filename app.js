@@ -36,6 +36,12 @@ const ICONS = {
   flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  today: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  list: '<path d="m3 17 2 2 4-4M3 7l2 2 4-4M13 6h8M13 12h8M13 18h8"/>',
+  gear: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
 };
 const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg>`;
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -53,7 +59,39 @@ let viewDate = new Date();
 let calMonth = { y: viewDate.getFullYear(), m: viewDate.getMonth() };
 let lastPct = 0;
 let editingId = null;
+let reportDate = null;                                     // Tagesbericht: welcher Tag
+let habitsSub = 'list';                                     // Habits-Seite: 'list' | 'reminders'
+let draft = null;                                          // Formularentwurf (überlebt Neuzeichnen)
+let formErr = '';
+let deleteArmed = false;
 
+// Uhrzeit + Vorlauf statt fester Erinnerungszeit: time = "HH:MM" oder '', before = Minuten vorher (0 = pünktlich) oder null (keine Erinnerung).
+function migrateHabits(list) {
+  for (const h of list) {
+    if ('remind' in h) {                                    // alte Fassung: "remind" war die Erinnerungszeit → jetzt Uhrzeit, pünktlich
+      if (h.time === undefined) { h.time = h.remind || ''; h.before = h.remind ? 0 : null; }
+      delete h.remind;
+    }
+    if (h.time === undefined) h.time = '';
+    if (h.before === undefined) h.before = null;
+  }
+  return list;
+}
+const BEFORE_OPTS = [[null, 'Nicht erinnern'], [0, 'Zur Uhrzeit'], [5, '5 Minuten vorher'], [10, '10 Minuten vorher'], [15, '15 Minuten vorher'], [30, '30 Minuten vorher'], [60, '1 Stunde vorher'], [120, '2 Stunden vorher']];
+const MAX_BEFORE = 20160;                                    // längster Vorlauf: 14 Tage in Minuten
+const PRESETS = BEFORE_OPTS.map(([v]) => v).filter((v) => v !== null);
+const fmtLead = (b) => {                                     // 1980 → "1 Tag 9 Stunden"
+  const d = Math.floor(b / 1440), h = Math.floor((b % 1440) / 60), m = b % 60;
+  return [d && `${d} ${d === 1 ? 'Tag' : 'Tage'}`, h && `${h} ${h === 1 ? 'Stunde' : 'Stunden'}`, m && `${m} ${m === 1 ? 'Minute' : 'Minuten'}`].filter(Boolean).join(' ');
+};
+const beforeText = (b) => (b === 0 ? 'zur Uhrzeit' : `${fmtLead(b)} vorher`);
+const customParts = (b) => (b % 1440 === 0 ? { n: b / 1440, u: 1440 } : b % 60 === 0 ? { n: b / 60, u: 60 } : { n: b, u: 1 });
+const maxFor = (unit) => Math.floor(MAX_BEFORE / unit);
+const remindAt = (h) => {                                    // Uhrzeit der Erinnerung (bei langem Vorlauf am Vortag oder früher)
+  const [H, M] = h.time.split(':').map(Number);
+  const m = (((H * 60 + M - h.before) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+};
 // Sync-Felder: ts = Änderungszeit je Tageseintrag ("2026-11-17|habitId" → ms), dirty = noch nicht hochgeladene Änderungen.
 function emptyState() { return { habits: [], log: {}, ts: {}, dirty: { habits: {}, logs: {} }, notified: {} }; }
 function load() {
@@ -61,7 +99,7 @@ function load() {
     const r = JSON.parse(localStorage.getItem(KEY));
     if (r && Array.isArray(r.habits)) {
       const dirty = r.dirty || {};
-      return { habits: r.habits, log: r.log || {}, ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {} }, notified: r.notified || {} };
+      return { habits: migrateHabits(r.habits), log: r.log || {}, ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {} }, notified: r.notified || {} };
     }
   } catch (e) { /* leer starten */ }
   return emptyState();
@@ -123,30 +161,49 @@ function daysLabel(days) {
 }
 
 /* ---------- Rendering ---------- */
-function render() {
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+
+// Tab-Leiste: 5 Reiter, in der Mitte "Neu" (Hauptaktion der App)
+const TABS = [
+  { id: 'today', href: '#heute', label: 'Heute', ic: 'today' },
+  { id: 'calendar', href: '#kalender', label: 'Kalender', ic: 'calendar' },
+  { id: 'new', href: '#neu', label: 'Neu', ic: 'plus', cls: 'tab-new' },
+  { id: 'habits', href: '#gewohnheiten', label: 'Habits', ic: 'list' },
+  { id: 'settings', href: '#einstellungen', label: 'Einstellungen', ic: 'gear' },
+];
+$('#tabbar').innerHTML = `<div class="tabbar-in">${TABS.map((t) =>
+  `<a href="${t.href}" data-tab="${t.id}" class="${t.cls || ''}">${t.id === 'new' ? `<span class="plus">${icon(t.ic)}</span>` : `<span class="ico">${icon(t.ic)}</span>`}<span class="lbl">${t.label}</span></a>`).join('')}</div>`;
+const tabOf = () => (view === 'report' ? 'calendar' : view === 'form' ? (editingId ? 'habits' : 'new') : view);
+
+const VIEWS = { today: todayHTML, calendar: calendarHTML, report: reportHTML, form: formHTML, habits: habitsHTML, settings: settingsHTML };
+function render(fresh) {
+  if (!fresh && view === 'form') syncDraft();               // getippten Text vor dem Neuzeichnen sichern
   const fid = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.fid;
-  const html = view === 'today' ? todayHTML() : view === 'calendar' ? calendarHTML() : habitsHTML();
-  $('#view').innerHTML = html;
+  $('#view').innerHTML = VIEWS[view]();
+  const cur = tabOf();
   document.querySelectorAll('.tabbar a').forEach((a) => {
-    if (a.dataset.tab === view) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    if (a.dataset.tab === cur) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
   if (fid) { const el = $(`[data-fid="${fid}"]`); if (el) el.focus({ preventScroll: true }); }
-  if (view === 'today') animateRing();
+  if (view === 'today' || view === 'report') animateBar();
 }
 
-function ringHTML(pct) {
-  const C = 2 * Math.PI * 45;
-  return `<div class="ring" role="img" aria-label="${pct} Prozent erreicht">
-    <svg viewBox="0 0 104 104"><circle class="track" cx="52" cy="52" r="45"/>
-    <circle class="bar" cx="52" cy="52" r="45" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - lastPct / 100)}" data-c="${C}"/></svg>
-    <div class="pct" aria-hidden="true">${pct}%</div></div>`;
+// Kompakte Tagesübersicht. Aufbau ist immer gleich (Prozent, Unterzeile, Serie, Balken), damit nichts springt.
+function heroHTML(pct, sub, streakN) {
+  const streakHTML = streakN === null ? '' :
+    `<div class="hero-streak ${streakN ? '' : 'off'}" role="img" aria-label="Serie: ${streakN} ${streakN === 1 ? 'Tag' : 'Tage'} in Folge"><span class="fire" aria-hidden="true">🔥</span><strong aria-hidden="true">${streakN}</strong></div>`;
+  return `<section class="hero" aria-label="Tagesübersicht">
+    <div class="hero-main"><div class="hero-pct">${pct}<span>%</span></div><div class="hero-sub">${sub}</div></div>
+    ${streakHTML}
+    <div class="hero-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="Fortschritt"><i data-pct="${pct}" style="transform:scaleX(${lastPct / 100})"></i></div>
+  </section>`;
 }
-function animateRing() {
-  const bar = $('.ring .bar');
+function animateBar() {
+  const bar = $('.hero-bar i');
   if (!bar) return;
-  const target = Number(bar.closest('.ring').getAttribute('aria-label').split(' ')[0]);
-  const C = Number(bar.dataset.c);
-  requestAnimationFrame(() => requestAnimationFrame(() => { bar.style.strokeDashoffset = C * (1 - target / 100); }));
+  const target = Number(bar.dataset.pct);
+  requestAnimationFrame(() => requestAnimationFrame(() => { bar.style.transform = `scaleX(${target / 100})`; }));
   lastPct = target;
 }
 
@@ -157,7 +214,6 @@ function todayHTML() {
   const hs = scheduled(k);
   const pct = dayPct(k) ?? 0;
   const done = hs.filter((h) => count(k, h.id) >= h.target).length;
-  const st = streak();
 
   const head = `<header class="page-head">
     <button class="icon-btn" data-action="day-prev" aria-label="Vorheriger Tag">${icon('left')}</button>
@@ -174,30 +230,24 @@ function todayHTML() {
   }
 
   const backBtn = isToday ? '' : `<button class="btn block" data-action="go-today" style="margin-bottom:16px">Zurück zu heute</button>`;
-  const hero = `<section class="hero" aria-label="Tagesfortschritt">${ringHTML(pct)}
-    <div class="stats"><strong>${hs.length ? `${done} von ${hs.length} erledigt` : 'Nichts geplant'}</strong>
-    ${st > 0 ? `<span class="chip-streak">${icon('flame')} ${st} ${st === 1 ? 'Tag' : 'Tage'} in Folge</span>` : '<span class="muted">Schließe alle Habits ab, um eine Serie zu starten.</span>'}
-    </div></section>`;
-
-  let list;
-  if (!hs.length) {
-    list = `<div class="empty"><h2>Für diesen Tag ist nichts geplant</h2><p>Heute ist Pause.</p></div>`;
-  } else {
-    list = `<ul class="list">${hs.map((h) => habitRow(k, h, isFuture)).join('')}</ul>`;
-  }
+  const hero = heroHTML(pct, hs.length ? `${done} von ${hs.length} erledigt` : 'Nichts geplant', streak());
+  const list = hs.length
+    ? `<ul class="list">${hs.map((h) => habitRow(k, h, isFuture)).join('')}</ul>`
+    : `<div class="empty"><h2>Für diesen Tag ist nichts geplant</h2><p>Heute ist Pause.</p></div>`;
   return `<div class="view-in">${head}${backBtn}${hero}${list}</div>`;
 }
 
 function habitRow(k, h, disabled) {
   const c = count(k, h.id);
   const isDone = c >= h.target;
-  const meta = [h.target > 1 ? `Ziel ${h.target}` : '', h.remind ? `${icon('bell')} ${esc(h.remind)}` : ''].filter(Boolean).join(' · ');
+  const meta = h.time ? `${icon('clock')} ${esc(h.time)}${h.before !== null ? `${icon('bell')}<span class="sr">, mit Erinnerung</span>` : ''}` : '';
   const info = `<div class="info"><div class="name">${esc(h.name)}</div>${meta ? `<div class="meta">${meta}</div>` : ''}</div>`;
+  const check = `<span class="check" aria-hidden="true">${icon('check')}</span>`;
   if (h.target === 1) {
     return `<li><button class="habit ${isDone ? 'done' : ''}" data-action="toggle" data-id="${h.id}" data-fid="t-${h.id}" aria-pressed="${isDone}" ${disabled ? 'disabled' : ''}>
-      ${info}<span class="check">${icon('check')}</span></button></li>`;
+      ${check}${info}</button></li>`;
   }
-  return `<li><div class="habit ${isDone ? 'done' : ''}">${info}
+  return `<li><div class="habit ${isDone ? 'done' : ''}">${check}${info}
     <div class="counter">
       <button class="icon-btn" data-action="dec" data-id="${h.id}" data-fid="d-${h.id}" aria-label="${esc(h.name)}: eins weniger" ${c === 0 || disabled ? 'disabled' : ''}>${icon('minus')}</button>
       <span class="count">${c}<span class="sr"> von </span><span aria-hidden="true">/</span>${h.target}</span>
@@ -223,7 +273,7 @@ function calendarHTML() {
     const p = future ? null : dayPct(k);
     const lvl = p === null ? 'none' : p === 0 ? 0 : p < 40 ? 1 : p < 70 ? 2 : p < 100 ? 3 : 4;
     if (p !== null) { sum += p; n++; if (p === 100) perfect++; }
-    const label = `${fmt({ day: 'numeric', month: 'long' }).format(new Date(y, m, d))}${p === null ? (future ? ', in der Zukunft' : ', nichts geplant') : `, ${p} Prozent`}`;
+    const label = `${fmt({ day: 'numeric', month: 'long' }).format(new Date(y, m, d))}${p === null ? (future ? ', in der Zukunft' : ', nichts geplant') : `, ${p} Prozent`}. Tagesbericht öffnen`;
     cells += `<button class="cal-cell ${k === tk ? 'today' : ''} ${future ? 'future' : ''}" data-l="${lvl}" data-action="open-day" data-date="${k}" aria-label="${esc(label)}" ${future ? 'disabled' : ''}>
       <span class="d">${d}</span><span class="p" aria-hidden="true">${p === null ? '' : p + '%'}</span></button>`;
   }
@@ -244,12 +294,138 @@ function calendarHTML() {
       <div class="stat"><div class="v">${n ? avg + ' %' : '–'}</div><div class="l">Ø Erfüllung</div></div>
       <div class="stat"><div class="v">${perfect}</div><div class="l">${perfect === 1 ? 'perfekter Tag' : 'perfekte Tage'}</div></div>
     </section>
-    <p class="hint muted" style="margin-top:16px">Tippe auf einen Tag, um ihn anzusehen oder nachzutragen.</p>
+    <p class="hint muted" style="margin-top:16px">Tippe auf einen Tag für den Tagesbericht.</p>
   </div>`;
 }
 
+/* ---------- Tagesbericht (aus dem Kalender) ---------- */
+function reportHTML() {
+  const k = reportDate;
+  const d = parse(k);
+  const isToday = k === todayKey();
+  const hs = scheduled(k);
+  const pct = dayPct(k) ?? 0;
+  const ok = hs.filter((h) => count(k, h.id) >= h.target);
+  const miss = hs.filter((h) => count(k, h.id) < h.target);
+  const row = (h, cls) => `<li class="rep-row ${cls}"><span class="mark" aria-hidden="true">${icon(cls === 'ok' ? 'check' : 'x')}</span>
+    <div class="info"><div class="name">${esc(h.name)}</div></div><span class="val">${count(k, h.id)} von ${h.target}</span></li>`;
+  const group = (id, title, items, cls) => items.length
+    ? `<section class="group" aria-labelledby="${id}"><h2 id="${id}">${title} <span class="count-badge">${items.length}</span></h2><ul class="list">${items.map((h) => row(h, cls)).join('')}</ul></section>` : '';
+
+  return `<div class="view-in">
+    <a class="back" href="#kalender">${icon('left')} Kalender</a>
+    <header class="page-head">
+      <button class="icon-btn" data-action="rep-prev" aria-label="Vorheriger Tag">${icon('left')}</button>
+      <div class="titles"><h1>${esc(fmt({ weekday: 'long' }).format(d))}</h1><p>${esc(fmt({ day: 'numeric', month: 'long', year: 'numeric' }).format(d))}</p></div>
+      <button class="icon-btn" data-action="rep-next" aria-label="Nächster Tag" ${isToday ? 'disabled' : ''}>${icon('right')}</button>
+    </header>
+    ${heroHTML(pct, hs.length ? `${ok.length} von ${hs.length} erledigt` : 'Nichts geplant', null)}
+    ${hs.length ? group('g-ok', 'Abgeschlossen', ok, 'ok') + group('g-miss', isToday ? 'Noch offen' : 'Versäumt', miss, 'miss')
+      : '<div class="empty"><h2>Für diesen Tag war nichts geplant</h2></div>'}
+    <div class="report-actions"><button class="btn" data-action="edit-day" data-date="${k}">${isToday ? 'Zu Heute' : 'Tag nachtragen oder ändern'}</button></div>
+  </div>`;
+}
+
+/* ---------- Neu / Bearbeiten (ganze Seite statt Dialog) ---------- */
+function newDraft(h) {
+  const d = h ? { name: h.name, target: h.target, days: [...h.days], time: h.time || '', before: h.time ? h.before : null }
+              : { name: '', target: 1, days: [...WEEK], time: '', before: null };
+  d.custom = d.before !== null && !PRESETS.includes(d.before);   // Wert außerhalb der Auswahl → "Eigene Zeit"
+  const cp = d.custom ? customParts(d.before) : { n: 1, u: 1440 };
+  d.cn = cp.n; d.cu = cp.u;
+  return d;
+}
+function syncDraft() {                                       // DOM → Entwurf
+  if (!draft || !$('#habit-form')) return;
+  draft.name = $('#f-name').value;
+  draft.target = parseInt($('#f-target').value, 10) || 1;
+  draft.days = [...document.querySelectorAll('#habit-form input[name="day"]:checked')].map((i) => Number(i.value));
+  draft.time = $('#f-time').value;
+  const sel = $('#f-before').value;
+  draft.custom = sel === 'custom';
+  const nEl = $('#f-before-n');
+  draft.cu = Number($('#f-before-u').value) || 1;
+  draft.cn = nEl.value;                                      // bleibt wie getippt (auch leer), damit Neuzeichnen nichts verschluckt
+  const n = parseInt(nEl.value, 10);
+  if (!draft.time) draft.before = null;
+  else if (draft.custom) draft.before = n >= 1 ? n * draft.cu : null;   // Grenze (14 Tage) wird erst beim Speichern geprüft, nicht beim Tippen
+  else draft.before = sel === '' ? null : Number(sel);
+}
+function formHTML() {
+  const h = editingId ? state.habits.find((x) => x.id === editingId) : null;
+  if (!draft) draft = newDraft(h);
+  const d = draft;
+  return `<div class="view-in form-wrap">
+    ${h ? `<a class="back" href="#gewohnheiten">${icon('left')} Habits</a>` : ''}
+    <header class="page-head left"><div class="titles"><h1>${h ? 'Bearbeiten' : 'Neue Gewohnheit'}</h1>
+      <p>${h ? 'Ändere Ziel, Tage oder Erinnerung.' : 'Was möchtest du dir angewöhnen?'}</p></div></header>
+    <form id="habit-form" class="form-page" novalidate>
+      <div class="field"><label for="f-name">Name</label>
+        <input id="f-name" type="text" maxlength="40" autocomplete="off" enterkeyhint="done" placeholder="z. B. 2 Bananen essen" value="${esc(d.name)}" ${formErr ? 'aria-invalid="true" aria-describedby="f-name-err"' : ''}>
+        <p class="error" id="f-name-err" role="alert" ${formErr ? '' : 'hidden'}>${esc(formErr)}</p></div>
+      <div class="field"><label for="f-target">Ziel pro Tag</label>
+        <div class="stepper">
+          <button type="button" data-step="-1" aria-label="Ziel verringern">${icon('minus')}</button>
+          <input id="f-target" type="number" inputmode="numeric" min="1" max="99" value="${d.target}" aria-describedby="f-target-hint">
+          <button type="button" data-step="1" aria-label="Ziel erhöhen">${icon('plus')}</button></div>
+        <p class="hint" id="f-target-hint">Zum Beispiel 2 für zwei Bananen.</p></div>
+      <fieldset class="field"><legend>Wochentage</legend>
+        <div class="chips">${WEEK.map((wd, i) => `<label><input type="checkbox" name="day" value="${wd}" aria-label="${WD_LONG[i]}" ${d.days.includes(wd) ? 'checked' : ''}><span aria-hidden="true">${WD_SHORT[i]}</span></label>`).join('')}</div></fieldset>
+      <div class="field"><label for="f-time">Uhrzeit (optional)</label>
+        <div class="row"><input id="f-time" type="time" value="${esc(d.time)}"><button type="button" class="btn ghost" data-action="clear-time">Entfernen</button></div>
+        <p class="hint">Wann machst du das normalerweise?</p></div>
+      <div class="field"><label for="f-before">Erinnerung</label>
+        <select id="f-before" ${d.time ? '' : 'disabled'} aria-describedby="f-before-hint">${beforeOptions(d)}</select>
+        <div id="f-custom" class="custom-before" ${d.time && d.custom ? '' : 'hidden'}>
+          <div class="row">
+            <input id="f-before-n" class="num" type="number" inputmode="numeric" min="1" max="${maxFor(d.cu)}" step="1" value="${esc(d.cn)}" aria-label="Wie lange vorher erinnern: Zahl">
+            <select id="f-before-u" aria-label="Wie lange vorher erinnern: Einheit">${[[1, 'Minuten'], [60, 'Stunden'], [1440, 'Tage']].map(([v, t]) => `<option value="${v}" ${v === d.cu ? 'selected' : ''}>${t}</option>`).join('')}</select>
+            <span class="muted nowrap">vorher</span></div>
+          <p class="error" id="f-before-err" role="alert" hidden></p>
+        </div>
+        <p class="hint" id="f-before-hint">Braucht eine Uhrzeit. Bis zu 14 Tage vorher möglich.</p></div>
+      <div class="actions"><button type="submit" class="btn primary">${h ? 'Speichern' : 'Gewohnheit anlegen'}</button></div>
+      ${h ? `<button type="button" class="btn danger ${deleteArmed ? 'armed' : ''}" data-action="delete-habit" data-fid="del">${deleteArmed ? 'Wirklich löschen?' : 'Löschen'}</button>` : ''}
+    </form></div>`;
+}
+
+function beforeOptions(d) {
+  const cur = d.custom ? 'custom' : d.before;
+  return [...BEFORE_OPTS, ['custom', 'Eigene Zeit …']]
+    .map(([v, t]) => `<option value="${v === null ? '' : v}" ${v === cur ? 'selected' : ''}>${t}</option>`).join('');
+}
+
+/* ---------- Habits (Liste | Erinnerungen) ---------- */
+const pushActive = () => 'Notification' in window && Notification.permission === 'granted' && push.state === 'on';
 function habitsHTML() {
   const hs = state.habits.filter((h) => !h.archived);
+  const seg = `<nav class="seg" aria-label="Ansicht wählen">
+    <a href="#gewohnheiten" ${habitsSub === 'list' ? 'aria-current="page"' : ''}>Habits</a>
+    <a href="#erinnerungen" ${habitsSub === 'reminders' ? 'aria-current="page"' : ''}>Erinnerungen</a></nav>`;
+  const head = `<header class="page-head left"><div class="titles"><h1>${habitsSub === 'list' ? 'Gewohnheiten' : 'Erinnerungen'}</h1>
+    <p>${habitsSub === 'list' ? `${hs.length} aktive ${hs.length === 1 ? 'Gewohnheit' : 'Gewohnheiten'}` : 'Wann du erinnert wirst'}</p></div></header>`;
+
+  let body;
+  if (habitsSub === 'list') {
+    body = hs.length
+      ? `<ul class="list">${hs.map((h) => `<li><a class="card-row" href="#bearbeiten/${h.id}" data-fid="e-${h.id}">
+          <div class="info"><div class="name">${esc(h.name)}</div>
+          <div class="meta">${h.target > 1 ? `Ziel ${h.target} · ` : ''}${daysLabel(h.days)}${h.time ? ` · ${esc(h.time)} Uhr` : ''}</div></div>${icon('right')}</a></li>`).join('')}</ul>`
+      : `<div class="empty"><h2>Noch nichts angelegt</h2><p>Tippe unten auf „Neu“, um deine erste Gewohnheit zu erstellen.</p></div>`;
+  } else {
+    const rs = hs.filter((h) => h.time && h.before !== null).sort((a, b) => remindAt(a).localeCompare(remindAt(b)));
+    body = rs.length
+      ? `<ul class="list">${rs.map((h) => `<li><a class="card-row" href="#bearbeiten/${h.id}" data-fid="r-${h.id}">
+          <span class="rem-time">${remindAt(h)}</span>
+          <div class="info"><div class="name">${esc(h.name)}</div><div class="meta">${h.before === 0 ? 'Um' : beforeText(h.before) + ' ·'} ${esc(h.time)} Uhr</div><div class="meta">${daysLabel(h.days)}</div></div>${icon('right')}</a></li>`).join('')}</ul>`
+      : `<div class="empty"><h2>Noch keine Erinnerungen</h2><p>Lege beim Anlegen oder Bearbeiten einer Gewohnheit eine Uhrzeit fest und wähle, wie lange vorher du erinnert werden willst.</p></div>`;
+    if (!pushActive()) body += `<div class="notice"><p>Erinnerungen kommen erst, wenn Benachrichtigungen aktiv sind.</p><a href="#einstellungen">Zu den Einstellungen</a></div>`;
+  }
+  return `<div class="view-in">${head}${seg}${body}</div>`;
+}
+
+/* ---------- Einstellungen ---------- */
+function notifPanelHTML() {
   const notifOK = 'Notification' in window;
   const perm = notifOK ? Notification.permission : 'unsupported';
   const standalone = window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
@@ -264,21 +440,15 @@ function habitsHTML() {
     if (push.state === 'error') notifErr = '<p class="error" role="alert">Die Einrichtung ist fehlgeschlagen. Prüfe dein Internet und versuche es erneut.</p>';
     notifBtn = btn(push.state === 'error' ? 'Erneut versuchen' : 'Erinnerungen aktivieren');
   }
-
+  return `<div class="panel"><p class="status">${esc(notifText)}</p>${notifErr}${notifBtn}</div>`;
+}
+function settingsHTML() {
   return `<div class="view-in">
-    <header class="page-head left"><div class="titles"><h1>Gewohnheiten</h1><p>${hs.length} aktive ${hs.length === 1 ? 'Gewohnheit' : 'Gewohnheiten'}</p></div></header>
-    <button class="btn primary block" data-action="new" style="margin-bottom:16px">${icon('plus')} Neue Gewohnheit</button>
-    ${hs.length ? `<ul class="list">${hs.map((h) => `<li><button class="card-row" data-action="edit" data-id="${h.id}" data-fid="e-${h.id}">
-      <div class="info"><div class="name">${esc(h.name)}</div>
-      <div class="meta">${h.target > 1 ? `Ziel ${h.target} · ` : ''}${daysLabel(h.days)}${h.remind ? ` · ${esc(h.remind)} Uhr` : ''}</div></div>${icon('edit')}</button></li>`).join('')}</ul>` : '<p class="muted">Noch nichts angelegt.</p>'}
-
+    <header class="page-head left"><div class="titles"><h1>Einstellungen</h1></div></header>
     <section class="section" aria-labelledby="h-cloud"><h2 id="h-cloud">Konto &amp; Cloud</h2>${accountHTML()}</section>
-
-    <section class="section" aria-labelledby="h-notif"><h2 id="h-notif">Erinnerungen</h2>
-      <div class="panel"><p class="status">${esc(notifText)}</p>${notifErr}${notifBtn}</div></section>
-
+    <section class="section" aria-labelledby="h-notif"><h2 id="h-notif">Benachrichtigungen</h2>${notifPanelHTML()}</section>
     <section class="section" aria-labelledby="h-backup"><h2 id="h-backup">Backup</h2>
-      <div class="panel"><p>Deine Daten liegen nur auf diesem Gerät. Wenn du die App löschst, sind sie weg. Exportiere sie deshalb ab und zu.</p>
+      <div class="panel"><p>Deine Daten liegen auf diesem Gerät${cloud.user ? ' und in der Cloud' : ''}. Ein Export gibt dir zusätzlich eine eigene Sicherungsdatei.</p>
       <div class="btn-row"><button class="btn" data-action="export">${icon('download')} Exportieren</button>
       <button class="btn" data-action="import">${icon('upload')} Importieren</button></div></div></section>
   </div>`;
@@ -317,6 +487,7 @@ function loginError(err) {
   return 'Anmeldung fehlgeschlagen. Versuche es später erneut.';
 }
 $('#view').addEventListener('submit', async (e) => {
+  if (e.target.id === 'habit-form') { e.preventDefault(); submitHabit(); return; }
   if (e.target.id !== 'login-form') return;
   e.preventDefault();
   const email = $('#l-email').value.trim();
@@ -345,8 +516,13 @@ const msToIso = (ms) => new Date(ms || 0).toISOString();
 const lts = (v) => (v === undefined ? -1 : v);              // fehlender Zeitstempel (Altdaten) = älter als alles, auch als 0
 
 function touchHabit(h, ts = Date.now()) { h.updated = ts; state.dirty.habits[h.id] = 1; queuePush(); }
+function timeFromCloud(r) {                                  // neue Spalten at_time/remind_before; alte Zeilen haben nur "remind"
+  const t = r.at_time || r.remind;
+  const before = r.remind_before !== null && r.remind_before !== undefined ? r.remind_before : (t && !r.at_time ? 0 : null);
+  return { time: t ? t.slice(0, 5) : '', before: t ? before : null };
+}
 function habitFromCloud(r) {
-  return { id: r.id, name: r.name, target: r.target, days: r.days, remind: r.remind ? r.remind.slice(0, 5) : '', created: r.created, archived: r.archived || null, updated: Date.parse(r.updated_at) };
+  return { id: r.id, name: r.name, target: r.target, days: r.days, ...timeFromCloud(r), created: r.created, archived: r.archived || null, updated: Date.parse(r.updated_at) };
 }
 function setLocalCount(day, id, n) {
   const d = (state.log[day] = state.log[day] || {});
@@ -401,7 +577,7 @@ async function pushDirty() {
   const uid = cloud.user.id;
   const hs = state.habits.filter((h) => state.dirty.habits[h.id]);
   const ls = Object.keys(state.dirty.logs).map((k) => { const [day, id] = splitKey(k); return { k, day, id, ts: state.ts[k] || 0, count: count(day, id) }; });
-  await upsertChunks('habits', hs.map((h) => ({ user_id: uid, id: h.id, name: h.name, target: h.target, days: h.days, remind: h.remind || null, created: h.created, archived: h.archived || null, updated_at: msToIso(h.updated) })), 'user_id,id');
+  await upsertChunks('habits', hs.map((h) => ({ user_id: uid, id: h.id, name: h.name, target: h.target, days: h.days, at_time: h.time || null, remind_before: h.time && h.before != null ? h.before : null, remind: null, created: h.created, archived: h.archived || null, updated_at: msToIso(h.updated) })), 'user_id,id');
   await upsertChunks('logs', ls.map((l) => ({ user_id: uid, day: l.day, habit_id: l.id, count: l.count, updated_at: msToIso(l.ts) })), 'user_id,day,habit_id');
   const sent = {};                                          // nur löschen, was sich während des Hochladens nicht erneut geändert hat
   hs.forEach((h) => { sent['h' + h.id] = h.updated; });
@@ -414,7 +590,7 @@ async function runSync(full) {
   if (!sb || !cloud.user) return;
   if (syncing) { pending = pending || full; if (full) pending = true; return; }
   syncing = true; cloud.sync = 'syncing'; cloud.lastAttempt = Date.now();
-  if (view === 'habits') render();
+  if (view === 'settings') render();
   let changed = false;
   try {
     if (full) {
@@ -429,7 +605,7 @@ async function runSync(full) {
   } finally {
     syncing = false;
     save();
-    if (changed || view === 'habits') render();
+    if ((changed || view === 'settings') && view !== 'form') render();   // Formular nie unter den Fingern neu zeichnen
     if (pending !== null) { const f = pending; pending = null; runSync(f); }
   }
 }
@@ -447,7 +623,7 @@ if (sb) {
     const now = cloud.user ? cloud.user.id : null;
     if (before === now) return;                             // z. B. Token-Refresh: nichts neu zeichnen
     cloud.sync = 'idle'; cloud.error = '';
-    if (view === 'habits') render();
+    if (view === 'settings') render();
     if (now) setTimeout(() => { runSync(true); setupPush(false); }, 0);            // nicht direkt im Callback auf Supabase warten
   });
 }
@@ -463,87 +639,83 @@ function toast(msg, type) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 3200);
 }
 
-/* ---------- Dialog: Habit anlegen / bearbeiten ---------- */
-const dlg = $('#habit-dialog');
-const form = $('#habit-form');
-const daysBox = $('#f-days');
-const fName = $('#f-name'), fTarget = $('#f-target'), fRemind = $('#f-remind');   // nicht form.name/form.target: das sind eingebaute Form-Eigenschaften
-const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
-daysBox.innerHTML = WEEK.map((d, i) =>
-  `<label><input type="checkbox" value="${d}" aria-label="${WD_LONG[i]}" checked><span aria-hidden="true">${WD_SHORT[i]}</span></label>`).join('');
-
-function openDialog(id) {
-  editingId = id || null;
-  const h = id ? state.habits.find((x) => x.id === id) : null;
-  $('#dlg-title').textContent = h ? 'Gewohnheit bearbeiten' : 'Neue Gewohnheit';
-  fName.value = h ? h.name : '';
-  fTarget.value = h ? h.target : 1;
-  fRemind.value = h ? h.remind || '' : '';
-  daysBox.querySelectorAll('input').forEach((i) => { i.checked = h ? h.days.includes(Number(i.value)) : true; });
-  clearErr();
-  const del = $('#f-delete');
-  del.hidden = !h;
-  del.classList.remove('armed');
-  del.textContent = 'Löschen';
-  dlg.showModal();
-  if (!h) fName.focus();
-}
-function clearErr() {
-  $('#f-name-err').hidden = true;
-  fName.removeAttribute('aria-invalid');
-  fName.removeAttribute('aria-describedby');
-}
-form.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const name = fName.value.trim();
+/* ---------- Formular-Logik (Neu / Bearbeiten) ---------- */
+function submitHabit() {
+  syncDraft();
+  const name = draft.name.trim();
   if (!name) {
-    $('#f-name-err').hidden = false;
-    fName.setAttribute('aria-invalid', 'true');
-    fName.setAttribute('aria-describedby', 'f-name-err');
-    fName.focus();
+    formErr = 'Bitte gib einen Namen ein.';
+    render(true);
+    $('#f-name').focus();
     return;
   }
-  const target = Math.max(1, Math.min(99, parseInt(fTarget.value, 10) || 1));
-  let days = [...daysBox.querySelectorAll('input:checked')].map((i) => Number(i.value));
-  if (!days.length) days = [...WEEK];
-  const remind = fRemind.value || '';
-  if (editingId) {
+  formErr = '';
+  if (draft.time && draft.custom && (draft.before === null || draft.before > MAX_BEFORE)) {   // "Eigene Zeit" ungültig
+    const er = $('#f-before-err');
+    er.textContent = draft.before === null ? 'Bitte gib eine Zahl ab 1 ein.' : 'Höchstens 14 Tage vorher möglich.'; er.hidden = false;
+    $('#f-before-n').setAttribute('aria-invalid', 'true');
+    $('#f-before-n').focus();
+    return;
+  }
+  const target = clamp(draft.target, 1, 99);
+  const days = draft.days.length ? draft.days : [...WEEK];
+  const time = draft.time || '';
+  const before = time ? draft.before : null;
+  const wasEdit = !!editingId;
+  if (wasEdit) {
     const h = state.habits.find((x) => x.id === editingId);
-    Object.assign(h, { name, target, days, remind });
+    Object.assign(h, { name, target, days, time, before });
     touchHabit(h);
   } else {
-    const h = { id: 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, target, days, remind, created: todayKey(), archived: null };
+    const h = { id: 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, target, days, time, before, created: todayKey(), archived: null };
     state.habits.push(h);
     touchHabit(h);
   }
   save();
-  dlg.close();
-  render();
-  toast(editingId ? 'Gespeichert' : 'Gewohnheit angelegt');
-});
-$('#f-cancel').addEventListener('click', () => dlg.close());
-$('#f-remind-clear').addEventListener('click', () => { fRemind.value = ''; });
-$('#f-delete').addEventListener('click', (e) => {
-  const b = e.currentTarget;
-  if (!b.classList.contains('armed')) { b.classList.add('armed'); b.textContent = 'Wirklich löschen?'; return; }
+  draft = null; deleteArmed = false;
+  toast(wasEdit ? 'Gespeichert' : 'Gewohnheit angelegt');
+  location.hash = wasEdit ? '#gewohnheiten' : '#heute';
+}
+function deleteHabit() {
+  if (!deleteArmed) { deleteArmed = true; render(); return; }  // erst nachfragen
   const h = state.habits.find((x) => x.id === editingId);
-  if (h) { h.archived = todayKey(); touchHabit(h); }       // Historie bleibt erhalten
+  if (h) { h.archived = todayKey(); touchHabit(h); }           // Historie bleibt erhalten
   save();
-  dlg.close();
-  render();
+  draft = null; deleteArmed = false;
   toast('Gelöscht. Frühere Tage bleiben im Kalender erhalten.');
-});
-form.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () => {
-  fTarget.value = Math.max(1, Math.min(99, (parseInt(fTarget.value, 10) || 1) + Number(b.dataset.step)));
-}));
-dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
-dlg.addEventListener('close', () => {                      // Fokus zurück, da die Ansicht neu gerendert wurde
-  const el = (editingId && $(`[data-fid="e-${editingId}"]`)) || $('[data-action="new"]');
-  if (el) el.focus({ preventScroll: true });
-});
+  location.hash = '#gewohnheiten';
+}
+function onFormInput(e) {
+  const id = e.target.id;
+  const sel = $('#f-before');
+  const custom = $('#f-custom');
+  if (id === 'f-time') {                                     // Uhrzeit steuert das Erinnerungs-Feld
+    const had = draft && draft.time;
+    if (e.target.value && !had && sel.value === '') sel.value = '0';   // erste Uhrzeit → gleich "Zur Uhrzeit" vorwählen
+    if (!e.target.value) sel.value = '';
+    sel.disabled = !e.target.value;
+  }
+  if (id === 'f-before' && sel.value === 'custom') {          // "Eigene Zeit": mit dem bisherigen Wert vorbelegen
+    const cp = draft && draft.before != null ? customParts(draft.before) : { n: (draft && draft.cn) || 1, u: (draft && draft.cu) || 1440 };
+    $('#f-before-n').value = cp.n; $('#f-before-u').value = cp.u;
+  }
+  if (id === 'f-before-u') $('#f-before-n').max = maxFor(Number(e.target.value));
+  if (id === 'f-before-n' || id === 'f-before-u') { const er = $('#f-before-err'); er.hidden = true; $('#f-before-n').removeAttribute('aria-invalid'); }
+  custom.hidden = !($('#f-time').value && sel.value === 'custom');
+  if (id === 'f-before' && !custom.hidden) custom.scrollIntoView({ block: 'nearest' });   // Feld nicht unter der festen Speichern-Leiste lassen
+  syncDraft();
+}
+$('#view').addEventListener('input', (e) => { if (e.target.closest && e.target.closest('#habit-form')) onFormInput(e); });
 
 /* ---------- Klicks ---------- */
 $('#view').addEventListener('click', (e) => {
+  const stp = e.target.closest('[data-step]');               // Plus/Minus am Ziel-Feld
+  if (stp) {
+    const i = $('#f-target');
+    i.value = clamp((parseInt(i.value, 10) || 1) + Number(stp.dataset.step), 1, 99);
+    syncDraft();
+    return;
+  }
   const el = e.target.closest('[data-action]');
   if (!el) return;
   const a = el.dataset.action;
@@ -558,9 +730,13 @@ $('#view').addEventListener('click', (e) => {
     case 'go-today': viewDate = new Date(); render(); break;
     case 'cal-prev': calMonth = shiftMonth(-1); render(); break;
     case 'cal-next': calMonth = shiftMonth(1); render(); break;
-    case 'open-day': viewDate = parse(el.dataset.date); location.hash = '#heute'; break;
-    case 'new': openDialog(); break;
-    case 'edit': openDialog(el.dataset.id); break;
+    case 'open-day': location.hash = '#tag/' + el.dataset.date; break;
+    case 'rep-prev': location.hash = '#tag/' + key(addDays(parse(reportDate), -1)); break;
+    case 'rep-next': location.hash = '#tag/' + key(addDays(parse(reportDate), 1)); break;
+    case 'edit-day': viewDate = parse(el.dataset.date); location.hash = '#heute'; break;
+    case 'new': location.hash = '#neu'; break;
+    case 'clear-time': $('#f-time').value = ''; onFormInput({ target: $('#f-time') }); break;
+    case 'delete-habit': deleteHabit(); break;
     case 'notif': setupPush(true); break;
     case 'sync': runSync(true).then(() => { if (cloud.sync === 'error') toast('Synchronisierung fehlgeschlagen', 'error'); }); break;
     case 'logout': sb.auth.signOut().then(() => toast('Abgemeldet')); break;
@@ -573,11 +749,29 @@ function shiftMonth(n) {
   return { y: d.getFullYear(), m: d.getMonth() };
 }
 
-/* ---------- Navigation (Hash) ---------- */
-const ROUTES = { '#heute': 'today', '#kalender': 'calendar', '#gewohnheiten': 'habits' };
+/* ---------- Navigation (Hash) ----------
+   #heute · #kalender · #tag/2026-11-17 · #neu · #gewohnheiten · #erinnerungen · #bearbeiten/<id> · #einstellungen */
 function route(fromNav) {
-  view = ROUTES[location.hash] || 'today';
-  render();
+  const [page, ...rest] = location.hash.replace(/^#/, '').split('/');
+  const arg = rest.join('/');
+  deleteArmed = false; formErr = '';
+  switch (page) {
+    case 'kalender': view = 'calendar'; break;
+    case 'tag':
+      if (/^\d{4}-\d{2}-\d{2}$/.test(arg) && arg <= todayKey()) { view = 'report'; reportDate = arg; } else view = 'calendar';
+      break;
+    case 'neu': view = 'form'; editingId = null; draft = newDraft(null); break;
+    case 'bearbeiten': {
+      const h = state.habits.find((x) => x.id === arg && !x.archived);
+      if (h) { view = 'form'; editingId = h.id; draft = newDraft(h); } else { view = 'habits'; habitsSub = 'list'; }
+      break;
+    }
+    case 'gewohnheiten': view = 'habits'; habitsSub = 'list'; break;
+    case 'erinnerungen': view = 'habits'; habitsSub = 'reminders'; break;
+    case 'einstellungen': view = 'settings'; break;
+    default: view = 'today';
+  }
+  render(true);
   window.scrollTo(0, 0);
   if (fromNav === true) $('#view').focus({ preventScroll: true });   // Screenreader/Tastatur landen im neuen Inhalt
 }
@@ -602,7 +796,7 @@ $('#import-file').addEventListener('change', async (e) => {
     const d = j.data || j;
     if (!Array.isArray(d.habits) || typeof (d.log || {}) !== 'object') throw new Error('format');
     if (!confirm('Alle aktuellen Daten durch das Backup ersetzen?')) return;
-    state = { ...emptyState(), habits: d.habits, log: d.log || {} };
+    state = { ...emptyState(), habits: migrateHabits(d.habits), log: d.log || {} };
     const now = Date.now();                                 // alles gilt als frisch geändert und wird hochgeladen
     state.habits.forEach((h) => touchHabit(h, now));
     for (const [day, m] of Object.entries(state.log)) for (const id of Object.keys(m)) { state.ts[day + '|' + id] = now; state.dirty.logs[day + '|' + id] = 1; }
@@ -643,7 +837,7 @@ async function setupPush(interactive) {
     push.state = 'error';
     if (interactive) toast('Einrichtung fehlgeschlagen', 'error');
   }
-  if (view === 'habits') render();
+  if (view === 'settings' || view === 'habits') render();
 }
 
 /* ---------- Tageswechsel & Hintergrund ---------- */

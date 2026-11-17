@@ -19,54 +19,7 @@
 <body>
   <main id="view" tabindex="-1"></main>
 
-  <nav class="tabbar" aria-label="Hauptnavigation">
-    <a href="#heute" data-tab="today"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span>Heute</span></a>
-    <a href="#kalender" data-tab="calendar"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg><span>Kalender</span></a>
-    <a href="#gewohnheiten" data-tab="habits"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 17 2 2 4-4M3 7l2 2 4-4M13 6h8M13 12h8M13 18h8"/></svg><span>Habits</span></a>
-  </nav>
-
-  <dialog id="habit-dialog" aria-labelledby="dlg-title">
-    <form id="habit-form" novalidate>
-      <h2 id="dlg-title">Neue Gewohnheit</h2>
-
-      <div class="field">
-        <label for="f-name">Name</label>
-        <input id="f-name" name="name" type="text" maxlength="40" autocomplete="off" enterkeyhint="done" placeholder="z. B. Bananen essen">
-        <p class="error" id="f-name-err" role="alert" hidden>Bitte gib einen Namen ein.</p>
-      </div>
-
-      <div class="field">
-        <label for="f-target">Ziel pro Tag</label>
-        <div class="stepper">
-          <button type="button" data-step="-1" aria-label="Ziel verringern"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
-          <input id="f-target" name="target" type="number" inputmode="numeric" min="1" max="99" value="1" aria-describedby="f-target-hint">
-          <button type="button" data-step="1" aria-label="Ziel erhöhen"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
-        </div>
-        <p class="hint" id="f-target-hint">Wie oft pro Tag? Zum Beispiel 2 für zwei Bananen.</p>
-      </div>
-
-      <fieldset class="field">
-        <legend>Wochentage</legend>
-        <div class="chips" id="f-days"></div>
-      </fieldset>
-
-      <div class="field">
-        <label for="f-remind">Erinnerung (optional)</label>
-        <div class="row">
-          <input id="f-remind" name="remind" type="time">
-          <button type="button" class="btn ghost" id="f-remind-clear">Entfernen</button>
-        </div>
-        <p class="hint">Du bekommst eine Nachricht, wenn der Habit zu dieser Zeit noch offen ist. Dafür musst du angemeldet sein.</p>
-      </div>
-
-      <div class="actions">
-        <button type="button" class="btn danger" id="f-delete" hidden>Löschen</button>
-        <span class="spacer"></span>
-        <button type="button" class="btn ghost" id="f-cancel">Abbrechen</button>
-        <button type="submit" class="btn primary">Speichern</button>
-      </div>
-    </form>
-  </dialog>
+  <nav class="tabbar" id="tabbar" aria-label="Hauptnavigation"></nav>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="sr-live" class="sr" aria-live="polite" aria-atomic="true"></div>
