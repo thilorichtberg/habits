@@ -37,6 +37,12 @@ const ICONS = {
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  chart: '<path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/>',
+  trophy: '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6M18 9h1.5a2.5 2.5 0 0 0 0-5H18M4 22h16M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22M18 2H6v7a6 6 0 0 0 12 0V2Z"/>',
+  utensils: '<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2M7 2v20M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>',
+  wallet: '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>',
   trash: '<path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6"/>',
   skip: '<polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/>',
   clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
@@ -66,7 +72,9 @@ let habitsSub = 'list';                                     // Habits-Seite: 'li
 let draft = null;                                          // Formularentwurf (überlebt Neuzeichnen)
 let formErr = '';
 let deleteArmed = false;
-let todoDraft = '';                                         // Text im Feld "Neue Aufgabe" (bleibt beim Neuzeichnen)
+let todoQuery = '';                                         // Suchtext in der To-Do-Liste
+let editingTodoId = null;                                   // To-Do-Seite: null = neue Aufgabe
+let todoForm = null;                                        // Entwurf der Aufgabe (überlebt Neuzeichnen)
 const foldOpen = { skip: false, done: false, tdone: false };               // Heute: aufgeklappte Bereiche bleiben beim Neuzeichnen offen
 
 // Uhrzeit + Vorlauf statt fester Erinnerungszeit: time = "HH:MM" oder '', before = Minuten vorher (0 = pünktlich) oder null (keine Erinnerung).
@@ -97,13 +105,13 @@ const remindAt = (h) => {                                    // Uhrzeit der Erin
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 };
 // Sync-Felder: ts = Änderungszeit je Tageseintrag ("2026-11-17|habitId" → ms), dirty = noch nicht hochgeladene Änderungen.
-function emptyState() { return { habits: [], log: {}, skip: {}, todos: [], ts: {}, dirty: { habits: {}, logs: {}, todos: {} }, notified: {} }; }
+function emptyState() { return { habits: [], log: {}, skip: {}, todos: [], presets: [], ts: {}, dirty: { habits: {}, logs: {}, todos: {}, presets: {} }, notified: {} }; }
 function load() {
   try {
     const r = JSON.parse(localStorage.getItem(KEY));
     if (r && Array.isArray(r.habits)) {
       const dirty = r.dirty || {};
-      return { habits: migrateHabits(r.habits), log: r.log || {}, skip: r.skip || {}, todos: r.todos || [], ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {}, todos: dirty.todos || {} }, notified: r.notified || {} };
+      return { habits: migrateHabits(r.habits), log: r.log || {}, skip: r.skip || {}, todos: (r.todos || []).map((t) => ({ ...t, subs: t.subs || [] })), presets: r.presets || [], ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {}, todos: dirty.todos || {}, presets: dirty.presets || {} }, notified: r.notified || {} };
     }
   } catch (e) { /* leer starten */ }
   return emptyState();
@@ -196,16 +204,91 @@ function daysLabel(days) {
    damit es auf allen Geräten ankommt und per "Wiederherstellen" zurückgenommen werden kann. */
 const findTodo = (id) => state.todos.find((t) => t.id === id);
 function touchTodo(t) { t.updated = Date.now(); state.dirty.todos[t.id] = 1; save(); queuePush(); }
-function addTodo(text) {
-  const v = String(text || '').trim().slice(0, 200);
-  if (!v) return;
+const newSid = () => 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const activePresets = () => state.presets.filter((p) => !p.deleted).sort((a, b) => a.name.localeCompare(b.name, 'de'));
+function touchPreset(p) { p.updated = Date.now(); state.dirty.presets[p.id] = 1; save(); queuePush(); }
+function saveTodoPreset(name, subTexts) {                    // gleicher Name = vorhandenes Preset aktualisieren
+  const same = state.presets.find((p) => !p.deleted && p.name.toLowerCase() === name.toLowerCase());
+  if (same) { same.subs = subTexts; touchPreset(same); return; }
   const now = Date.now();
-  const t = { id: 't' + now.toString(36) + Math.random().toString(36).slice(2, 5), text: v, list: 'today', done: false, deleted: false, created: now, updated: now };
-  state.todos.push(t);
-  todoDraft = '';
-  touchTodo(t);
-  render();
-  announce(`Aufgabe hinzugefügt: ${v}`);
+  const p = { id: 'p' + now.toString(36) + Math.random().toString(36).slice(2, 5), name, subs: subTexts, deleted: false, created: now, updated: now };
+  state.presets.push(p);
+  touchPreset(p);
+}
+function removePreset(id) {
+  const p = state.presets.find((x) => x.id === id);
+  if (!p) return;
+  p.deleted = true; touchPreset(p); render();
+  toast(`Preset „${p.name}“ gelöscht`, undefined, { label: 'Wiederherstellen', run: () => { p.deleted = false; touchPreset(p); render(); } });
+}
+function toggleSub(todoId, subId) {
+  const t = findTodo(todoId);
+  const s = t && t.subs.find((x) => x.id === subId);
+  if (!s) return;
+  s.done = !s.done;
+  touchTodo(t); render();
+  announce(`${s.text}: ${s.done ? 'erledigt' : 'wieder offen'}`);
+}
+// ---- Seite "Neue Aufgabe" / "Aufgabe bearbeiten": Titel, Unterpunkte, Bereich, Preset
+function newTodoDraft(t) {
+  return t ? { text: t.text, subs: t.subs.map((s) => ({ ...s })), list: t.list, savePreset: false }
+           : { text: '', subs: [], list: 'today', savePreset: false };
+}
+function syncTodoDraft() {                                   // DOM → Entwurf
+  if (!todoForm || !$('#todo-edit-form')) return;
+  const prev = new Map(todoForm.subs.map((s) => [s.id, s]));
+  todoForm.text = $('#tf-text').value;
+  todoForm.subs = [...document.querySelectorAll('#todo-edit-form .sub-input')].map((i) => ({ id: i.dataset.sid, text: i.value, done: !!(prev.get(i.dataset.sid) || {}).done }));
+  const l = document.querySelector('#todo-edit-form input[name="tf-list"]:checked');
+  if (l) todoForm.list = l.value;
+  todoForm.savePreset = $('#tf-preset').checked;
+}
+function addSubRow() {
+  syncTodoDraft();
+  todoForm.subs.push({ id: newSid(), text: '', done: false });
+  render(true);
+  const inputs = document.querySelectorAll('#todo-edit-form .sub-input');
+  if (inputs.length) inputs[inputs.length - 1].focus();
+}
+function delSubRow(sid) {
+  syncTodoDraft();
+  todoForm.subs = todoForm.subs.filter((s) => s.id !== sid);
+  render(true);
+}
+function applyPreset(id) {
+  const p = state.presets.find((x) => x.id === id && !x.deleted);
+  if (!p) return;
+  syncTodoDraft();
+  todoForm.text = p.name;
+  todoForm.subs = p.subs.map((text) => ({ id: newSid(), text, done: false }));
+  render(true);
+  announce(`Preset geladen: ${p.name}`);
+}
+function submitTodo() {
+  syncTodoDraft();
+  const text = todoForm.text.trim().slice(0, 200);
+  if (!text) {
+    const er = $('#tf-err');
+    er.textContent = 'Bitte gib einen Titel ein.'; er.hidden = false;
+    $('#tf-text').setAttribute('aria-invalid', 'true'); $('#tf-text').focus();
+    return;
+  }
+  const subs = todoForm.subs.map((s) => ({ id: s.id, text: s.text.trim().slice(0, 200), done: !!s.done })).filter((s) => s.text);
+  const wasEdit = !!editingTodoId;
+  if (wasEdit) {
+    const t = findTodo(editingTodoId);
+    Object.assign(t, { text, subs, list: todoForm.list });
+    touchTodo(t);
+  } else {
+    const now = Date.now();
+    const t = { id: 't' + now.toString(36) + Math.random().toString(36).slice(2, 5), text, subs, list: todoForm.list, done: false, deleted: false, created: now, updated: now };
+    state.todos.push(t);
+    touchTodo(t);
+  }
+  if (todoForm.savePreset) saveTodoPreset(text, subs.map((s) => s.text));
+  todoForm = null;
+  toast(wasEdit ? 'Gespeichert' : 'Aufgabe hinzugefügt');
+  location.hash = '#todo';
 }
 function toggleTodo(id) {
   const t = findTodo(id);
@@ -221,33 +304,12 @@ function moveTodo(id) {                                      // Heute ⇄ Späte
   touchTodo(t); render();
   toast(`„${t.text}“ nach ${t.list === 'today' ? 'Heute' : 'Später'} verschoben`, undefined, { label: 'Rückgängig', run: () => moveTodo(id) });
 }
-function removeTodo(id) {
+function removeTodo(id, rerender = true) {
   const t = findTodo(id);
   if (!t) return;
-  t.deleted = true; touchTodo(t); render();
+  t.deleted = true; touchTodo(t); if (rerender) render();
   toast(`„${t.text}“ gelöscht`, undefined, { label: 'Wiederherstellen', run: () => { t.deleted = false; touchTodo(t); render(); toast('Wiederhergestellt'); } });
 }
-function editTodo(id) {
-  const t = findTodo(id);
-  if (!t) return;
-  sheetCtx = { todoId: id };
-  openSheet(`<h2 id="sheet-title">Aufgabe bearbeiten</h2>
-    <input id="todo-edit-text" type="text" maxlength="200" value="${esc(t.text)}" aria-label="Aufgabe" enterkeyhint="done" autocomplete="off">
-    <button type="button" class="btn primary block" data-sheet="todo-save">Speichern</button>
-    <button type="button" class="btn danger block" data-sheet="todo-delete">Löschen</button>
-    <button type="button" class="btn ghost block" data-sheet="close">Abbrechen</button>`);
-  const i = $('#todo-edit-text'); i.focus(); i.setSelectionRange(i.value.length, i.value.length);
-}
-function handleTodoSheet(action) {
-  const id = sheetCtx && sheetCtx.todoId;
-  const t = findTodo(id);
-  const v = $('#todo-edit-text') ? $('#todo-edit-text').value.trim().slice(0, 200) : '';
-  closeSheet();
-  if (!t) return;
-  if (action === 'todo-save' && v) { t.text = v; touchTodo(t); render(); }
-  if (action === 'todo-delete') removeTodo(id);
-}
-
 /* ---------- Rendering ---------- */
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
@@ -255,26 +317,45 @@ const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Sam
 // Tab-Leiste: 5 Reiter, in der Mitte "Neu" (Hauptaktion der App)
 const TABS = [
   { id: 'today', href: '#heute', label: 'Heute', ic: 'today' },
-  { id: 'calendar', href: '#kalender', label: 'Kalender', ic: 'calendar' },
+  { id: 'overview', href: '#uebersicht', label: 'Übersicht', ic: 'chart' },
   { id: 'new', href: '#neu', label: 'Neu', ic: 'plus', cls: 'tab-new' },
-  { id: 'habits', href: '#gewohnheiten', label: 'Übersicht', ic: 'list' },
+  { id: 'todo', href: '#todo', label: 'To-Do', ic: 'list' },
   { id: 'settings', href: '#einstellungen', label: 'Einstellungen', ic: 'gear' },
 ];
-$('#tabbar').innerHTML = `<div class="tabbar-in">${TABS.map((t) =>
-  `<a href="${t.href}" data-tab="${t.id}" class="${t.cls || ''}">${t.id === 'new' ? `<span class="plus">${icon(t.ic)}</span>` : `<span class="ico">${icon(t.ic)}</span>`}<span class="lbl">${t.label}</span></a>`).join('')}</div>`;
-const tabOf = () => (view === 'report' ? 'calendar' : view === 'form' ? (editingId ? 'habits' : 'new') : view);
+$('#tabbar').innerHTML = `<div class="tabbar-in"><span class="tab-indicator" aria-hidden="true"></span>${TABS.map((t) =>
+  `<a href="${t.href}" data-tab="${t.id}" class="${t.cls || ''}" title="${t.label}">${t.id === 'new' ? `<span class="plus">${icon(t.ic)}</span>` : `<span class="ico">${icon(t.ic)}</span>`}<span class="lbl sr">${t.label}</span></a>`).join('')}</div>`;   // nur Symbole sichtbar, der Name bleibt für Screenreader
+// Die türkise Hinterlegung ist ein einziges Element, das zum gewählten Reiter gleitet (bei allen Reitern gleich groß).
+let indicatorPlaced = false;
+function moveIndicator(instant) {
+  const ind = $('.tab-indicator'), cur = $('.tabbar a[aria-current="page"]');
+  if (!ind || !cur) return;
+  if (!cur.offsetWidth) return;
+  const ix = 6, iy = 4;   // Layout-Maße (offset*), nicht getBoundingClientRect: das enthielte die Drück-Animation des Reiters
+  ind.classList.toggle('instant', !!instant);
+  ind.style.width = `${cur.offsetWidth - 2 * ix}px`;
+  ind.style.height = `${cur.offsetHeight - 2 * iy}px`;
+  const wrap = ind.parentElement.getBoundingClientRect(), r = cur.getBoundingClientRect();
+  const left = r.left + r.width / 2 - wrap.left - cur.offsetWidth / 2;   // Mittelpunkt bleibt bei der Drück-Animation gleich, so wird die Skalierung herausgerechnet
+  ind.style.transform = `translate(${left + ix}px, ${cur.offsetTop + iy}px)`;
+  if (instant) { void ind.offsetWidth; ind.classList.remove('instant'); indicatorPlaced = true; }
+}
+window.addEventListener('resize', () => moveIndicator(true));
+const tabOf = () => (['calendar', 'report', 'habits'].includes(view) ? 'overview' : view === 'todoform' ? 'todo' : view === 'form' ? (editingId ? 'overview' : 'new') : view);   // Kalender, Bericht, Gewohnheiten gehören zur Übersicht
 
-const VIEWS = { today: todayHTML, calendar: calendarHTML, report: reportHTML, form: formHTML, habits: habitsHTML, settings: settingsHTML };
+const VIEWS = { today: todayHTML, overview: overviewHTML, calendar: calendarHTML, report: reportHTML, form: formHTML, habits: habitsHTML, todo: todoPageHTML, todoform: todoFormHTML, settings: settingsHTML };
 function render(fresh) {
-  if (!fresh && view === 'form') syncDraft();               // getippten Text vor dem Neuzeichnen sichern
+  if (!fresh && view === 'form') syncDraft();
+  if (!fresh && view === 'todoform') syncTodoDraft();               // getippten Text vor dem Neuzeichnen sichern
   const fid = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.fid;
   $('#view').innerHTML = VIEWS[view]();
   const cur = tabOf();
   document.querySelectorAll('.tabbar a').forEach((a) => {
     if (a.dataset.tab === cur) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
+  moveIndicator(!indicatorPlaced);                            // beim ersten Mal sofort, danach gleitend
   if (fid) { const el = $(`[data-fid="${fid}"]`); if (el) el.focus({ preventScroll: true }); }
   if (view === 'today' || view === 'report') animateBar();
+  replayPress();                                              // das neu gezeichnete Element federt nach, auf das gerade getippt wurde
 }
 
 // Kompakte Tagesübersicht. Aufbau ist immer gleich (Prozent, Unterzeile, Serie, Balken), damit nichts springt.
@@ -403,6 +484,7 @@ function calendarHTML() {
   const avg = n ? Math.round(sum / n) : 0;
   const title = fmt({ month: 'long', year: 'numeric' }).format(first);
   return `<div class="view-in">
+    <a class="back" href="#uebersicht">${icon('left')} Übersicht</a>
     <header class="page-head">
       <button class="icon-btn" data-action="cal-prev" aria-label="Vorheriger Monat">${icon('left')}</button>
       <div class="titles"><h1>${esc(title)}</h1></div>
@@ -487,7 +569,7 @@ function formHTML() {
   if (!draft) draft = newDraft(h);
   const d = draft;
   return `<div class="view-in form-wrap">
-    ${h ? `<a class="back" href="#gewohnheiten">${icon('left')} Übersicht</a>` : ''}
+    ${h ? `<a class="back" href="#gewohnheiten">${icon('left')} Gewohnheiten</a>` : ''}
     <header class="page-head left"><div class="titles"><h1>${h ? 'Bearbeiten' : 'Neue Gewohnheit'}</h1>
       <p>${h ? 'Ändere Ziel, Tage oder Erinnerung.' : 'Was möchtest du dir angewöhnen?'}</p></div></header>
     <form id="habit-form" class="form-page" novalidate>
@@ -528,17 +610,61 @@ function beforeOptions(d) {
 
 /* ---------- Habits (Liste | Erinnerungen) ---------- */
 const pushActive = () => 'Notification' in window && Notification.permission === 'granted' && push.state === 'on';
+/* ---------- Übersicht: Kennzahlen, Kalender-Vorschau, Zugang zu den Gewohnheiten ---------- */
+function avg30() {                                           // Ø Tagesquote der letzten 30 abgeschlossenen Tage (heute zählt noch nicht mit)
+  const t = new Date();
+  let sum = 0, n = 0;
+  for (let i = 1; i <= 30; i++) { const p = dayPct(key(addDays(t, -i))); if (p !== null) { sum += p; n++; } }
+  return n ? Math.round(sum / n) : null;
+}
+function longestStreak() {                                   // längste Serie überhaupt (Tage mit 100 %, Tage ohne Plan zählen nicht)
+  const first = state.habits.reduce((m, h) => (h.created < m ? h.created : m), todayKey());
+  let best = 0, run = 0;
+  for (let d = parse(first), end = parse(todayKey()); d <= end; d = addDays(d, 1)) {
+    const p = dayPct(key(d));
+    if (p === null) continue;
+    if (p === 100) { run++; if (run > best) best = run; } else run = 0;
+  }
+  return best;
+}
+const tageText = (n) => `${n} ${n === 1 ? 'Tag' : 'Tage'}`;
+function miniCalHTML() {                                     // verkleinerter Monat, tippen öffnet den ganzen Kalender
+  const now = new Date(), y = now.getFullYear(), m = now.getMonth(), tk = todayKey();
+  const lead = (new Date(y, m, 1).getDay() + 6) % 7;
+  const dim = new Date(y, m + 1, 0).getDate();
+  let cells = '';
+  for (let i = 0; i < lead; i++) cells += '<span class="mini-cell blank" aria-hidden="true"></span>';
+  for (let d = 1; d <= dim; d++) {
+    const k = key(new Date(y, m, d));
+    const p = k > tk ? null : dayPct(k);
+    const lvl = p === null ? 'none' : p === 0 ? 0 : p < 40 ? 1 : p < 70 ? 2 : p < 100 ? 3 : 4;
+    cells += `<span class="mini-cell ${k === tk ? 'today' : ''}" data-l="${lvl}">${d}</span>`;
+  }
+  return `<div class="cal-preview-head"><strong>${esc(fmt({ month: 'long', year: 'numeric' }).format(now))}</strong>${icon('right')}</div>
+    <div class="mini-week" aria-hidden="true">${WD_SHORT.map((d) => `<span>${d}</span>`).join('')}</div>
+    <div class="mini-grid" aria-hidden="true">${cells}</div>`;
+}
+function overviewHTML() {
+  const avg = avg30(), st = streak(), best = longestStreak();
+  const nh = state.habits.filter((h) => !h.archived).length;
+  return `<div class="view-in">
+    <header class="page-head left"><div class="titles"><h1>Übersicht</h1><p>Deine Zahlen auf einen Blick</p></div></header>
+    <section class="stats-card" aria-label="Kennzahlen">
+      <div><div class="stat-pct">${avg === null ? '–' : `${avg}<span>%</span>`}</div><div class="stat-cap">Ø letzte 30 Tage</div></div>
+      <div class="stat-streaks">
+        <div class="stat-best" role="img" aria-label="Längste Serie: ${tageText(best)}">${icon('trophy')}<span aria-hidden="true">${best}</span></div>
+        <div class="hero-streak ${st ? '' : 'off'}" role="img" aria-label="Aktuelle Serie: ${tageText(st)}"><span class="fire" aria-hidden="true">🔥</span><strong aria-hidden="true">${st}</strong></div>
+      </div></section>
+    <a class="cal-preview" href="#kalender" aria-label="Kalender öffnen">${miniCalHTML()}</a>
+    <a class="card-row" href="#gewohnheiten"><div class="info"><div class="name">Gewohnheiten</div><div class="meta">${nh} aktiv · Erinnerungen</div></div>${icon('right')}</a>
+  </div>`;
+}
+
+/* ---------- Gewohnheiten (Alle | Erinnerungen), erreichbar über die Übersicht ---------- */
 function habitsHTML() {
   const hs = state.habits.filter((h) => !h.archived);
-  const openTodos = state.todos.filter((t) => !t.deleted && !t.done).length;
-  const isTodo = habitsSub === 'todo';
-  const seg = `<nav class="seg" aria-label="Bereich wählen">
-    <a href="#gewohnheiten" ${!isTodo ? 'aria-current="page"' : ''}>Gewohnheiten</a>
-    <a href="#todo" ${isTodo ? 'aria-current="page"' : ''}>To-Do</a></nav>`;
-  const sub = isTodo ? `${openTodos} offene ${openTodos === 1 ? 'Aufgabe' : 'Aufgaben'}` : `${hs.length} aktive ${hs.length === 1 ? 'Gewohnheit' : 'Gewohnheiten'}`;
-  const head = `<header class="page-head left"><div class="titles"><h1>Übersicht</h1><p>${sub}</p></div></header>`;
-  if (isTodo) return `<div class="view-in">${head}${seg}${todoHTML()}</div>`;
-
+  const head = `<a class="back" href="#uebersicht">${icon('left')} Übersicht</a>
+    <header class="page-head left"><div class="titles"><h1>Gewohnheiten</h1><p>${hs.length} aktive ${hs.length === 1 ? 'Gewohnheit' : 'Gewohnheiten'}</p></div></header>`;
   const filters = `<nav class="filters" aria-label="Filter">
     <a class="chip-filter" href="#gewohnheiten" ${habitsSub === 'list' ? 'aria-current="page"' : ''}>Alle</a>
     <a class="chip-filter" href="#erinnerungen" ${habitsSub === 'reminders' ? 'aria-current="page"' : ''}>Erinnerungen</a></nav>`;
@@ -562,35 +688,85 @@ function habitsHTML() {
       : `<div class="empty"><h2>Noch keine Erinnerungen</h2><p>Lege beim Anlegen oder Bearbeiten einer Gewohnheit eine Uhrzeit fest und wähle, wie lange vorher du erinnert werden willst.</p></div>`;
     if (!pushActive()) body += `<div class="notice"><p>Erinnerungen kommen erst, wenn Benachrichtigungen aktiv sind.</p><a href="#einstellungen">Zu den Einstellungen</a></div>`;
   }
-  return `<div class="view-in">${head}${seg}${filters}${body}</div>`;
+  return `<div class="view-in">${head}${filters}${body}</div>`;
+}
+
+/* ---------- To-Do-Seite (eigener Reiter) ---------- */
+function todoPageHTML() {
+  const open = state.todos.filter((t) => !t.deleted && !t.done).length;
+  return `<div class="view-in"><header class="page-head left"><div class="titles"><h1>To-Do</h1><p>${open} offene ${open === 1 ? 'Aufgabe' : 'Aufgaben'}</p></div></header>${todoHTML()}</div>`;
 }
 
 /* ---------- To-Do-Ansicht: Heute, Später, Erledigt (eingeklappt) ---------- */
 function todoHTML() {
-  const all = state.todos.filter((t) => !t.deleted).sort((a, b) => b.created - a.created);   // neueste oben, direkt unter dem Eingabefeld
+  return `<div class="todo-bar">
+      <label class="search"><span class="sr">Aufgaben durchsuchen</span>${icon('search')}<input id="todo-search" type="search" placeholder="Suchen …" autocomplete="off" enterkeyhint="search" value="${esc(todoQuery)}"></label>
+      <button type="button" class="icon-btn add" data-action="todo-new" aria-label="Neue Aufgabe erstellen">${icon('plus')}</button></div>
+    <div id="todo-results">${todoResultsHTML()}</div>`;
+}
+const todoMatches = (t, q) => !q || t.text.toLowerCase().includes(q) || t.subs.some((s) => s.text.toLowerCase().includes(q));
+function todoResultsHTML() {
+  const q = todoQuery.trim().toLowerCase();
+  const all = state.todos.filter((t) => !t.deleted && todoMatches(t, q)).sort((a, b) => b.created - a.created);   // neueste oben
   const today = all.filter((t) => !t.done && t.list === 'today');
   const later = all.filter((t) => !t.done && t.list === 'later');
   const done = all.filter((t) => t.done).sort((a, b) => b.updated - a.updated);
   const section = (id, title, items, empty) => `<section class="group" aria-labelledby="${id}"><h2 id="${id}">${title} <span class="count-badge">${items.length}</span></h2>
     ${items.length ? `<ul class="list">${items.map(todoRow).join('')}</ul>` : `<p class="todo-empty">${empty}</p>`}</section>`;
-  return `<form id="todo-form" class="todo-add" novalidate>
-      <input id="todo-new" type="text" maxlength="200" autocomplete="off" enterkeyhint="done" placeholder="Neue Aufgabe …" aria-label="Neue Aufgabe" value="${esc(todoDraft)}" data-fid="todo-new">
-      <button type="submit" class="icon-btn add" aria-label="Aufgabe hinzufügen" data-fid="todo-new">${icon('plus')}</button></form>
-    ${section('t-today', 'Heute', today, 'Nichts für heute.')}
-    ${section('t-later', 'Später', later, 'Leer. Nach rechts wischen schiebt eine Aufgabe hierher.')}
+  if (q && !all.length) return `<p class="todo-empty">Keine Treffer für „${esc(todoQuery.trim())}“.</p>`;
+  return `${section('t-today', 'Heute', today, q ? 'Keine Treffer.' : 'Nichts für heute.')}
+    ${section('t-later', 'Später', later, q ? 'Keine Treffer.' : 'Leer. Nach rechts wischen schiebt eine Aufgabe hierher.')}
     ${all.length ? '<p class="hint swipe-hint">Nach rechts wischen verschiebt zwischen Heute und Später, nach links löscht.</p>' : ''}
     ${foldHTML('tdone', 'Erledigt', done, todoRow)}`;
 }
 function todoRow(t) {
+  const subs = t.subs || [];
+  const nDone = subs.filter((x) => x.done).length;
   const inner = `<div class="todo ${t.done ? 'done' : ''}">
-    <button type="button" class="todo-check" data-action="todo-toggle" data-id="${t.id}" data-fid="tc-${t.id}" aria-pressed="${t.done}" aria-label="${esc(t.text)}: ${t.done ? 'wieder öffnen' : 'als erledigt markieren'}"><span class="check" aria-hidden="true">${icon('check')}</span></button>
-    <button type="button" class="todo-text" data-action="todo-edit" data-id="${t.id}" data-fid="te-${t.id}">${esc(t.text)}</button></div>`;
+    <div class="todo-main">
+      <button type="button" class="todo-check" data-action="todo-toggle" data-id="${t.id}" data-fid="tc-${t.id}" aria-pressed="${t.done}" aria-label="${esc(t.text)}: ${t.done ? 'wieder öffnen' : 'als erledigt markieren'}"><span class="check" aria-hidden="true">${icon('check')}</span></button>
+      <button type="button" class="todo-text" data-action="todo-edit" data-id="${t.id}" data-fid="te-${t.id}">${esc(t.text)}</button>
+      ${subs.length ? `<span class="todo-progress ${nDone === subs.length ? 'all' : ''}" role="img" aria-label="${nDone} von ${subs.length} Unterpunkten erledigt">${nDone}/${subs.length}</span>` : ''}
+    </div>
+    ${subs.length ? `<ul class="subs">${subs.map((x) => `<li class="sub ${x.done ? 'done' : ''}">
+      <button type="button" class="sub-check" data-action="sub-toggle" data-id="${t.id}" data-sub="${x.id}" data-fid="sc-${x.id}" aria-pressed="${x.done}" aria-label="${esc(x.text)}: ${x.done ? 'wieder öffnen' : 'als erledigt markieren'}"><span class="check small" aria-hidden="true">${icon('check')}</span></button>
+      <span class="sub-text">${esc(x.text)}</span></li>`).join('')}</ul>` : ''}</div>`;
   const target = t.list === 'today' ? 'Später' : 'Heute';
   return `<li class="swipe" data-kind="todo" data-id="${t.id}" data-right="${t.done ? 0 : 1}">
     ${t.done ? '' : `<div class="swipe-bg skip" aria-hidden="true">${icon(t.list === 'today' ? 'clock' : 'calendar')}</div>`}
     <div class="swipe-bg del" aria-hidden="true">${icon('trash')}</div>
     <div class="swipe-front">${inner}</div>
     <div class="swipe-alt">${t.done ? '' : `<button type="button" class="sr-btn" data-action="todo-move" data-id="${t.id}">${esc(t.text)} nach ${target} verschieben</button>`}<button type="button" class="sr-btn" data-action="todo-del" data-id="${t.id}">${esc(t.text)} löschen</button></div></li>`;
+}
+
+/* ---------- Seite: Neue Aufgabe / Aufgabe bearbeiten ---------- */
+function todoFormHTML() {
+  const t = editingTodoId ? findTodo(editingTodoId) : null;
+  if (!todoForm) todoForm = newTodoDraft(t);
+  const d = todoForm;
+  const presets = activePresets();
+  const presetBlock = t ? '' : `<section class="presets" aria-labelledby="pr-h"><h2 id="pr-h">Presets</h2>
+    ${presets.length
+      ? `<ul class="preset-list">${presets.map((p) => `<li class="preset"><button type="button" class="preset-load" data-action="preset-load" data-id="${p.id}"><strong>${esc(p.name)}</strong><span>${p.subs.length} ${p.subs.length === 1 ? 'Unterpunkt' : 'Unterpunkte'}</span></button><button type="button" class="icon-btn" data-action="preset-del" data-id="${p.id}" aria-label="Preset ${esc(p.name)} löschen">${icon('x')}</button></li>`).join('')}</ul>`
+      : `<p class="hint">Noch keine Presets. Unten „Als Preset speichern“ ankreuzen, dann kannst du die Aufgabe hier wieder laden.</p>`}</section>`;
+  return `<div class="view-in form-wrap">
+    <a class="back" href="#todo">${icon('left')} To-Do</a>
+    <header class="page-head left"><div class="titles"><h1>${t ? 'Aufgabe bearbeiten' : 'Neue Aufgabe'}</h1></div></header>
+    <form id="todo-edit-form" class="form-page" novalidate>
+      ${presetBlock}
+      <div class="field"><label for="tf-text">Aufgabe</label>
+        <input id="tf-text" type="text" maxlength="200" autocomplete="off" enterkeyhint="done" placeholder="z. B. Koffer packen" value="${esc(d.text)}">
+        <p class="error" id="tf-err" role="alert" hidden></p></div>
+      <fieldset class="field"><legend>Unterpunkte</legend>
+        ${d.subs.length ? `<ul class="sub-edit-list">${d.subs.map((x, i) => `<li class="sub-edit"><input type="text" class="sub-input" maxlength="200" data-sid="${x.id}" value="${esc(x.text)}" placeholder="Unterpunkt" aria-label="Unterpunkt ${i + 1}" enterkeyhint="next" autocomplete="off">
+          <button type="button" class="icon-btn" data-action="sub-del" data-sid="${x.id}" aria-label="Unterpunkt ${i + 1} entfernen">${icon('x')}</button></li>`).join('')}</ul>` : ''}
+        <button type="button" class="btn ghost add-sub" data-action="sub-add">${icon('plus')} Unterpunkt hinzufügen</button></fieldset>
+      <fieldset class="field"><legend>Bereich</legend>
+        <div class="chips two">${[['today', 'Heute'], ['later', 'Später']].map(([v, l]) => `<label><input type="radio" name="tf-list" value="${v}" ${d.list === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></fieldset>
+      <label class="check-row"><input type="checkbox" id="tf-preset" ${d.savePreset ? 'checked' : ''}><span>Als Preset speichern</span></label>
+      <div class="actions"><button type="submit" class="btn primary">${t ? 'Speichern' : 'Hinzufügen'}</button></div>
+      ${t ? `<button type="button" class="btn danger" data-action="todo-form-del">Löschen</button>` : ''}
+    </form></div>`;
 }
 
 /* ---------- Einstellungen ---------- */
@@ -627,7 +803,7 @@ function settingsHTML() {
 function accountHTML() {
   if (!sb) return '<div class="panel"><p>Die Cloud-Anbindung konnte nicht geladen werden. Starte die App mit Internetverbindung neu.</p></div>';
   if (cloud.user) {
-    const pending = Object.keys(state.dirty.habits).length + Object.keys(state.dirty.logs).length + Object.keys(state.dirty.todos).length;
+    const pending = Object.keys(state.dirty.habits).length + Object.keys(state.dirty.logs).length + Object.keys(state.dirty.todos).length + Object.keys(state.dirty.presets).length;
     const time = cloud.lastSync ? fmt({ hour: '2-digit', minute: '2-digit' }).format(new Date(cloud.lastSync)) : '';
     let msg;
     if (cloud.sync === 'syncing') msg = 'Synchronisiere …';
@@ -657,7 +833,7 @@ function loginError(err) {
 }
 $('#view').addEventListener('submit', async (e) => {
   if (e.target.id === 'habit-form') { e.preventDefault(); submitHabit(); return; }
-  if (e.target.id === 'todo-form') { e.preventDefault(); addTodo(todoDraft); return; }
+  if (e.target.id === 'todo-edit-form') { e.preventDefault(); submitTodo(); return; }
   if (e.target.id !== 'login-form') return;
   e.preventDefault();
   const email = $('#l-email').value.trim();
@@ -716,9 +892,27 @@ function setLocalSkip(day, id, reason) {
   if (!Object.keys(d).length) delete state.skip[day];
 }
 function todoFromCloud(r) {
-  return { id: r.id, text: r.text, list: r.list, done: !!r.done, deleted: !!r.deleted, created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
+  return { id: r.id, text: r.text, list: r.list, done: !!r.done, deleted: !!r.deleted, subs: Array.isArray(r.subs) ? r.subs : [], created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
 }
-function mergeFromCloud(habitRows, logRows, todoRows = []) {
+function presetFromCloud(r) {
+  return { id: r.id, name: r.name, subs: Array.isArray(r.subs) ? r.subs : [], deleted: !!r.deleted, created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
+}
+function mergeList(arr, rows, fromCloud, dirty) {            // Listen mit id: pro Eintrag gewinnt die jüngere Änderung
+  let changed = false;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  for (const r of rows) {
+    const local = arr.find((x) => x.id === r.id);
+    const cts = Date.parse(r.updated_at);
+    if (!local) { arr.push(fromCloud(r)); changed = true; }
+    else if (cts > lts(local.updated)) { Object.assign(local, fromCloud(r)); delete dirty[local.id]; changed = true; }
+  }
+  for (const x of arr) {
+    const r = byId.get(x.id);
+    if (!r || lts(x.updated) > Date.parse(r.updated_at)) dirty[x.id] = 1;
+  }
+  return changed;
+}
+function mergeFromCloud(habitRows, logRows, todoRows = [], presetRows = []) {
   let changed = false;
   const cHabits = new Map(habitRows.map((r) => [r.id, r]));
   for (const r of habitRows) {
@@ -744,17 +938,8 @@ function mergeFromCloud(habitRows, logRows, todoRows = []) {
     const r = cLogs.get(k);
     if (!r || lts(state.ts[k]) > Date.parse(r.updated_at)) state.dirty.logs[k] = 1;
   }
-  const cTodos = new Map(todoRows.map((r) => [r.id, r]));
-  for (const r of todoRows) {                               // To-Dos: pro Aufgabe gewinnt die jüngere Änderung
-    const local = findTodo(r.id);
-    const cts = Date.parse(r.updated_at);
-    if (!local) { state.todos.push(todoFromCloud(r)); changed = true; }
-    else if (cts > lts(local.updated)) { Object.assign(local, todoFromCloud(r)); delete state.dirty.todos[local.id]; changed = true; }
-  }
-  for (const t of state.todos) {
-    const r = cTodos.get(t.id);
-    if (!r || lts(t.updated) > Date.parse(r.updated_at)) state.dirty.todos[t.id] = 1;
-  }
+  if (mergeList(state.todos, todoRows, todoFromCloud, state.dirty.todos)) changed = true;
+  if (mergeList(state.presets, presetRows, presetFromCloud, state.dirty.presets)) changed = true;
   return changed;
 }
 async function upsertChunks(table, rows, onConflict) {
@@ -769,7 +954,9 @@ async function pushDirty() {
   const ls = Object.keys(state.dirty.logs).map((k) => { const [day, id] = splitKey(k); return { k, day, id, ts: state.ts[k] || 0, count: count(day, id), skip: skipOf(day, id) }; });
   await upsertChunks('habits', hs.map((h) => ({ user_id: uid, id: h.id, name: h.name, target: h.target, days: h.days, at_time: h.time || null, remind_before: h.time && h.before != null ? h.before : null, remind: null, created: h.created, archived: h.archived || null, updated_at: msToIso(h.updated) })), 'user_id,id');
   const ts = state.todos.filter((t) => state.dirty.todos[t.id]);
-  await upsertChunks('todos', ts.map((t) => ({ user_id: uid, id: t.id, text: t.text, list: t.list, done: t.done, deleted: t.deleted, created_at: msToIso(t.created), updated_at: msToIso(t.updated) })), 'user_id,id');
+  await upsertChunks('todos', ts.map((t) => ({ user_id: uid, id: t.id, text: t.text, list: t.list, done: t.done, deleted: t.deleted, subs: t.subs || [], created_at: msToIso(t.created), updated_at: msToIso(t.updated) })), 'user_id,id');
+  const ps = state.presets.filter((p) => state.dirty.presets[p.id]);
+  await upsertChunks('todo_presets', ps.map((p) => ({ user_id: uid, id: p.id, name: p.name, subs: p.subs, deleted: p.deleted, created_at: msToIso(p.created), updated_at: msToIso(p.updated) })), 'user_id,id');
   await upsertChunks('logs', ls.map((l) => ({ user_id: uid, day: l.day, habit_id: l.id, count: l.count, skip: l.skip, updated_at: msToIso(l.ts) })), 'user_id,day,habit_id');
   const sent = {};                                          // nur löschen, was sich während des Hochladens nicht erneut geändert hat
   hs.forEach((h) => { sent['h' + h.id] = h.updated; });
@@ -777,6 +964,8 @@ async function pushDirty() {
   for (const h of hs) if ((h.updated) === sent['h' + h.id] && state.dirty.habits[h.id]) delete state.dirty.habits[h.id];
   ts.forEach((t) => { sent['t' + t.id] = t.updated; });
   for (const t of ts) if (t.updated === sent['t' + t.id] && state.dirty.todos[t.id]) delete state.dirty.todos[t.id];
+  ps.forEach((p) => { sent['p' + p.id] = p.updated; });
+  for (const p of ps) if (p.updated === sent['p' + p.id] && state.dirty.presets[p.id]) delete state.dirty.presets[p.id];
   for (const l of ls) if ((state.ts[l.k] || 0) === l.ts) delete state.dirty.logs[l.k];
 }
 let syncing = false, pending = null, pushTimer;
@@ -788,8 +977,8 @@ async function runSync(full) {
   let changed = false;
   try {
     if (full) {
-      const [hr, lr, tr] = await Promise.all([fetchAll('habits', ['id']), fetchAll('logs', ['day', 'habit_id']), fetchAll('todos', ['id'])]);
-      changed = mergeFromCloud(hr, lr, tr);
+      const [hr, lr, tr, pr] = await Promise.all([fetchAll('habits', ['id']), fetchAll('logs', ['day', 'habit_id']), fetchAll('todos', ['id']), fetchAll('todo_presets', ['id'])]);
+      changed = mergeFromCloud(hr, lr, tr, pr);
     }
     await pushDirty();
     cloud.sync = 'ok'; cloud.lastSync = Date.now();
@@ -799,7 +988,7 @@ async function runSync(full) {
   } finally {
     syncing = false;
     save();
-    if ((changed || view === 'settings') && view !== 'form') render();   // Formular nie unter den Fingern neu zeichnen
+    if ((changed || view === 'settings') && view !== 'form' && view !== 'todoform') render();   // Formular nie unter den Fingern neu zeichnen
     if (pending !== null) { const f = pending; pending = null; runSync(f); }
   }
 }
@@ -808,7 +997,7 @@ function queuePush() {                                      // Debounce: mehrere
   clearTimeout(pushTimer);
   pushTimer = setTimeout(() => runSync(false), 1500);
 }
-const hasDirty = () => Object.keys(state.dirty.habits).length + Object.keys(state.dirty.logs).length + Object.keys(state.dirty.todos).length > 0;
+const hasDirty = () => Object.keys(state.dirty.habits).length + Object.keys(state.dirty.logs).length + Object.keys(state.dirty.todos).length + Object.keys(state.dirty.presets).length > 0;
 if (sb) {
   // Feuert beim Start (INITIAL_SESSION), nach Login/Logout und beim Token-Refresh.
   sb.auth.onAuthStateChange((event, session) => {
@@ -859,7 +1048,6 @@ sheet.addEventListener('click', (e) => {
   if (e.target === sheet) { closeSheet(); return; }          // Tippen neben das Blatt schließt es
   const b = e.target.closest('[data-sheet]');
   if (!b || !sheetCtx) return;
-  if (b.dataset.sheet.startsWith('todo-')) { handleTodoSheet(b.dataset.sheet); return; }
   const h = state.habits.find((x) => x.id === sheetCtx.id);
   const { k } = sheetCtx;
   closeSheet();
@@ -871,7 +1059,6 @@ sheet.addEventListener('click', (e) => {
     toast(`„${h.name}“ übersprungen (${r ? r.label : b.dataset.reason})`, undefined, { label: 'Rückgängig', run: () => setSkip(k, h, null) });
   }
 });
-sheet.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'todo-edit-text') { e.preventDefault(); handleTodoSheet('todo-save'); } });
 const ageDays = (h) => Math.round((parse(todayKey()) - parse(h.created)) / 864e5);
 function requestDelete(id) {
   const h = state.habits.find((x) => x.id === id);
@@ -975,8 +1162,15 @@ function onFormInput(e) {
   syncDraft();
 }
 $('#view').addEventListener('input', (e) => {
-  if (e.target.id === 'todo-new') todoDraft = e.target.value;
+  if (e.target.id === 'todo-search') { todoQuery = e.target.value; $('#todo-results').innerHTML = todoResultsHTML(); }   // nur die Ergebnisse neu zeichnen, das Feld behält Fokus und Cursor
+  if (e.target.closest && e.target.closest('#todo-edit-form')) {
+    syncTodoDraft();
+    if (e.target.id === 'tf-text') { $('#tf-err').hidden = true; e.target.removeAttribute('aria-invalid'); }
+  }
   if (e.target.closest && e.target.closest('#habit-form')) onFormInput(e);
+});
+$('#view').addEventListener('keydown', (e) => {              // Enter in einem Unterpunkt legt den nächsten an
+  if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('sub-input')) { e.preventDefault(); addSubRow(); }
 });
 
 /* ---------- Klicks ---------- */
@@ -999,7 +1193,14 @@ $('#view').addEventListener('click', (e) => {
     case 'dec': setCount(k, h, count(k, h.id) - 1); break;
     case 'unskip': setSkip(k, h, null); break;
     case 'todo-toggle': toggleTodo(el.dataset.id); break;
-    case 'todo-edit': editTodo(el.dataset.id); break;
+    case 'todo-new': location.hash = '#todo-neu'; break;
+    case 'todo-edit': location.hash = '#todo-bearbeiten/' + el.dataset.id; break;
+    case 'sub-toggle': toggleSub(el.dataset.id, el.dataset.sub); break;
+    case 'sub-add': addSubRow(); break;
+    case 'sub-del': delSubRow(el.dataset.sid); break;
+    case 'preset-load': applyPreset(el.dataset.id); break;
+    case 'preset-del': removePreset(el.dataset.id); break;
+    case 'todo-form-del': { const id = editingTodoId; todoForm = null; removeTodo(id, false); location.hash = '#todo'; break; }
     case 'todo-move': moveTodo(el.dataset.id); break;
     case 'todo-del': removeTodo(el.dataset.id); break;
     case 'skip-ask': askSkip(el.dataset.id); break;
@@ -1086,6 +1287,7 @@ function route(fromNav) {
   const arg = rest.join('/');
   deleteArmed = false; formErr = '';
   switch (page) {
+    case 'uebersicht': view = 'overview'; break;
     case 'kalender': view = 'calendar'; break;
     case 'tag':
       if (/^\d{4}-\d{2}-\d{2}$/.test(arg) && arg <= todayKey()) { view = 'report'; reportDate = arg; } else view = 'calendar';
@@ -1098,7 +1300,13 @@ function route(fromNav) {
     }
     case 'gewohnheiten': view = 'habits'; habitsSub = 'list'; break;
     case 'erinnerungen': view = 'habits'; habitsSub = 'reminders'; break;
-    case 'todo': view = 'habits'; habitsSub = 'todo'; break;
+    case 'todo': view = 'todo'; break;
+    case 'todo-neu': view = 'todoform'; editingTodoId = null; todoForm = newTodoDraft(null); break;
+    case 'todo-bearbeiten': {
+      const t = findTodo(arg);
+      if (t && !t.deleted) { view = 'todoform'; editingTodoId = t.id; todoForm = newTodoDraft(t); } else view = 'todo';
+      break;
+    }
     case 'einstellungen': view = 'settings'; break;
     default: view = 'today';
   }
@@ -1127,11 +1335,12 @@ $('#import-file').addEventListener('change', async (e) => {
     const d = j.data || j;
     if (!Array.isArray(d.habits) || typeof (d.log || {}) !== 'object') throw new Error('format');
     if (!confirm('Alle aktuellen Daten durch das Backup ersetzen?')) return;
-    state = { ...emptyState(), habits: migrateHabits(d.habits), log: d.log || {}, skip: d.skip || {}, todos: d.todos || [] };
+    state = { ...emptyState(), habits: migrateHabits(d.habits), log: d.log || {}, skip: d.skip || {}, todos: (d.todos || []).map((t) => ({ ...t, subs: t.subs || [] })), presets: d.presets || [] };
     const now = Date.now();                                 // alles gilt als frisch geändert und wird hochgeladen
     state.habits.forEach((h) => touchHabit(h, now));
     for (const src of [state.log, state.skip]) for (const [day, m] of Object.entries(src)) for (const id of Object.keys(m)) { state.ts[day + '|' + id] = now; state.dirty.logs[day + '|' + id] = 1; }
     state.todos.forEach((t) => { t.updated = now; state.dirty.todos[t.id] = 1; });
+    state.presets.forEach((p) => { p.updated = now; state.dirty.presets[p.id] = 1; });
     save(); queuePush(); render(); toast('Backup eingespielt');
   } catch (err) { toast('Datei konnte nicht gelesen werden.', 'error'); }
 });
@@ -1186,6 +1395,78 @@ function tick() {
 setInterval(tick, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { tick(); runSync(true); setupPush(false); } });
 window.addEventListener('online', () => runSync(true));
+
+/* ---------- Seitenleiste: weitere Apps ---------- */
+const drawer = $('#drawer');
+drawer.innerHTML = `<div class="drawer-head"><h2 id="drawer-title">Meine Apps</h2>
+  <button type="button" class="icon-btn" data-drawer="close" aria-label="Menü schließen">${icon('x')}</button></div>
+  <ul class="apps">
+    <li><button type="button" class="app-item current" data-drawer="close" aria-current="true">${icon('today')}<span class="app-name">Habits</span></button></li>
+    <li><button type="button" class="app-item" disabled>${icon('utensils')}<span class="app-name">Ernährung</span><span class="soon">Bald</span></button></li>
+    <li><button type="button" class="app-item" disabled>${icon('wallet')}<span class="app-name">Finanzen</span><span class="soon">Bald</span></button></li>
+  </ul>`;
+$('#menu-btn').addEventListener('click', () => drawer.showModal());
+drawer.addEventListener('click', (e) => { if (e.target === drawer || e.target.closest('[data-drawer="close"]')) drawer.close(); });
+window.addEventListener('hashchange', () => { if (drawer.open) drawer.close(); });
+
+/* ---------- Drück-Animation für jeden Knopf ----------
+   Beim Drücken schrumpft das Element schnell (90 ms), beim Loslassen federt es mit kleinem Überschwingen zurück.
+   Wird die Ansicht nach dem Tippen neu gezeichnet (fast jede Aktion), spielt render() das Zurückfedern am neuen
+   Element ab. Bei "Bewegung reduzieren" passiert nichts. Weg-Wischen und Scrollen brechen das Drücken ab. */
+const PRESS = 'button, a[href], summary, .chips label, .check-row';
+const noMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+let press = null, lastPress = null;
+function pressTarget(t) {
+  const el = t && t.closest && t.closest(PRESS);
+  if (!el || el.disabled || el.getAttribute('aria-disabled') === 'true') return null;
+  if (el.classList.contains('sr-btn') && el !== document.activeElement) return null;   // unsichtbare Tastatur-Knöpfe
+  return el;
+}
+function pressSelector(el) {                                  // so findet render() das Element nach dem Neuzeichnen wieder
+  if (el.dataset.fid) return `[data-fid="${el.dataset.fid}"]`;
+  if (el.dataset.action) return `[data-action="${el.dataset.action}"]` + ['id', 'date', 'sub', 'reason'].map((k) => (el.dataset[k] ? `[data-${k}="${el.dataset[k]}"]` : '')).join('');
+  return null;
+}
+function playRelease(el) {
+  el.classList.remove('pressing', 'release');
+  void el.offsetWidth;                                       // Animation neu starten
+  el.classList.add('release');
+  el.addEventListener('animationend', function done(e) { if (e.target !== el) return; el.classList.remove('release'); el.removeEventListener('animationend', done); });
+}
+function replayPress() {
+  if (!lastPress || Date.now() - lastPress.t > 400) return;
+  const sel = lastPress.sel; lastPress = null;
+  const el = sel && document.querySelector(sel);
+  if (el && !el.classList.contains('release')) playRelease(el);
+}
+function clearPress() { if (press) { press.el.classList.remove('pressing'); press = null; } }
+document.addEventListener('pointerdown', (e) => {
+  if (noMotion() || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  const el = pressTarget(e.target);
+  if (!el) return;
+  clearPress();
+  el.classList.remove('release');
+  el.classList.add('pressing');
+  press = { el, x: e.clientX, y: e.clientY, pid: e.pointerId };
+}, { passive: true });
+document.addEventListener('pointermove', (e) => {             // Finger wandert weg (Wischen/Scrollen): Drücken abbrechen
+  if (press && e.pointerId === press.pid && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 8) clearPress();
+}, { passive: true });
+function endPress(e, cancelled) {
+  if (!press || e.pointerId !== press.pid) return;
+  const p = press; press = null;
+  p.el.classList.remove('pressing');
+  if (cancelled) return;
+  playRelease(p.el);
+  lastPress = { sel: pressSelector(p.el), t: Date.now() };
+}
+document.addEventListener('pointerup', (e) => endPress(e, false), { passive: true });
+document.addEventListener('pointercancel', (e) => endPress(e, true), { passive: true });
+document.addEventListener('click', (e) => {                    // Tastatur (Enter/Leertaste) löst ebenfalls das Zurückfedern aus
+  if (e.detail !== 0 || noMotion()) return;
+  const el = pressTarget(e.target);
+  if (el) { playRelease(el); lastPress = { sel: pressSelector(el), t: Date.now() }; }
+}, true);
 
 /* ---------- Start ---------- */
 route();

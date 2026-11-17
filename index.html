@@ -17,10 +17,15 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <header class="topbar">
+    <button type="button" id="menu-btn" class="icon-btn" aria-label="Menü öffnen: weitere Apps" aria-haspopup="dialog"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+  </header>
+
   <main id="view" tabindex="-1"></main>
 
   <nav class="tabbar" id="tabbar" aria-label="Hauptnavigation"></nav>
 
+  <dialog id="drawer" aria-labelledby="drawer-title"></dialog>
   <dialog id="sheet" aria-labelledby="sheet-title"></dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
