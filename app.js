@@ -313,7 +313,7 @@ const remindAt = (h) => {                                    // Uhrzeit der Erin
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 };
 // Sync-Felder: ts = Änderungszeit je Tageseintrag ("2026-11-17|habitId" → ms), dirty = noch nicht hochgeladene Änderungen.
-function defaultSettings() { return { dailyEnabled: true, dailyTime: '20:00', updated: 0 }; }   // updated 0 = nie geändert, der Server nimmt dann dieselben Standardwerte
+function defaultSettings() { return { dailyEnabled: true, dailyTime: '20:00', weekHabits: null, updated: 0 }; }   // updated 0 = nie geändert, der Server nimmt dann dieselben Standardwerte
 function emptyState() { return { habits: [], log: {}, skip: {}, todos: [], presets: [], settings: defaultSettings(), ts: {}, dirty: { habits: {}, logs: {}, todos: {}, presets: {}, settings: false }, notified: {} }; }
 function load() {
   try {
@@ -826,10 +826,10 @@ function beforeOptions(d) {
 /* ---------- Habits (Liste | Erinnerungen) ---------- */
 const pushActive = () => 'Notification' in window && Notification.permission === 'granted' && push.state === 'on';
 /* ---------- Übersicht: Kennzahlen, Kalender-Vorschau, Zugang zu den Gewohnheiten ---------- */
-function avg30() {                                           // Ø Tagesquote der letzten 30 abgeschlossenen Tage (heute zählt noch nicht mit)
+function avg30() {                                           // Ø Tagesquote der letzten 30 Tage, heute eingeschlossen
   const t = new Date();
   let sum = 0, n = 0;
-  for (let i = 1; i <= 30; i++) { const p = dayPct(key(addDays(t, -i))); if (p !== null) { sum += p; n++; } }
+  for (let i = 0; i < 30; i++) { const p = dayPct(key(addDays(t, -i))); if (p !== null) { sum += p; n++; } }
   return n ? Math.round(sum / n) : null;
 }
 function longestStreak() {                                   // längste Serie überhaupt (Tage mit 100 %, Tage ohne Plan zählen nicht)
@@ -859,6 +859,45 @@ function miniCalHTML() {                                     // verkleinerter Mo
     <div class="mini-week" aria-hidden="true">${WD_SHORT.map((d) => `<span>${d}</span>`).join('')}</div>
     <div class="mini-grid" aria-hidden="true">${cells}</div>`;
 }
+/* ---------- Übersicht: 7-Tage-Tabelle (bis zu 10 selbst gewählte Gewohnheiten, feste Reihenfolge) ---------- */
+const WEEK_MAX = 10;
+function weekIds() {                                         // gewählte, noch vorhandene Gewohnheiten; ohne Auswahl die ersten 10
+  const act = state.habits.filter((h) => !h.archived);
+  const sel = state.settings.weekHabits;
+  if (!Array.isArray(sel)) return act.slice(0, WEEK_MAX).map((h) => h.id);
+  return sel.filter((id) => act.some((h) => h.id === id)).slice(0, WEEK_MAX);
+}
+function weekCell(h, k, today) {                             // → [Klasse, Text für Screenreader]
+  const planned = h.days.includes(parse(k).getDay()) && h.created <= k && (!h.archived || h.archived > k);
+  if (!planned || isExcused(k, h.id)) return ['na', skipOf(k, h.id) ? 'entschuldigt' : 'kein Termin'];
+  if (!skipOf(k, h.id) && count(k, h.id) >= h.target) return ['ok', 'geschafft'];
+  if (k === today && !skipOf(k, h.id)) return ['open', 'heute noch offen'];
+  return ['miss', 'nicht geschafft'];
+}
+function weekHTML() {
+  const tk = todayKey(), days = [];
+  for (let i = 6; i >= 0; i--) days.push(addDays(new Date(), -i));
+  const hs = weekIds().map((id) => state.habits.find((h) => h.id === id));
+  const head = `<div class="week-head"><h2>Letzte 7 Tage</h2><button type="button" class="btn ghost small" data-action="week-pick">Auswählen</button></div>`;
+  if (!hs.length) return `<section class="week" aria-label="Letzte 7 Tage">${head}<p class="hint">${state.habits.some((h) => !h.archived) ? 'Wähle bis zu 10 Gewohnheiten aus, die hier erscheinen sollen.' : 'Sobald du Gewohnheiten angelegt hast, siehst du hier die letzten 7 Tage.'}</p></section>`;
+  const ths = days.map((d) => { const k = key(d); return `<th scope="col" class="${k === tk ? 'today' : ''}"><span class="wd">${WD_SHORT[(d.getDay() + 6) % 7]}</span><span class="dn">${d.getDate()}</span></th>`; }).join('');
+  const rows = hs.map((h) => `<tr><th scope="row" class="wname"><span>${emo(h.emoji)}${esc(h.name)}</span></th>${days.map((d) => {
+    const k = key(d), [c, t] = weekCell(h, k, tk);
+    return `<td class="wc ${c} ${k === tk ? 'today' : ''}"><span class="dot" aria-hidden="true">${c === 'ok' ? icon('check') : c === 'na' ? icon('x') : ''}</span><span class="sr">${t}</span></td>`;
+  }).join('')}</tr>`).join('');
+  return `<section class="week" aria-label="Letzte 7 Tage">${head}
+    <table class="week-table"><thead><tr><td></td>${ths}</tr></thead><tbody>${rows}</tbody></table>
+    <p class="week-legend" aria-hidden="true"><span class="lg ok"></span>geschafft <span class="lg miss"></span>nicht geschafft <span class="lg na">${icon('x')}</span>kein Termin</p></section>`;
+}
+function openWeekPicker() {
+  const act = state.habits.filter((h) => !h.archived), sel = weekIds();
+  sheetCtx = {};
+  openSheet(`<div class="sheet-head"><h2 id="sheet-title">Gewohnheiten für die Tabelle</h2>
+    <button type="button" class="icon-btn" data-sheet="close" aria-label="Schließen">${icon('x')}</button></div>
+    <p class="sheet-note" id="wk-count" aria-live="polite">${sel.length} von ${WEEK_MAX} gewählt. Die Reihenfolge ist die Reihenfolge deiner Auswahl.</p>
+    <div class="week-pick">${act.map((h) => `<label class="check-row"><input type="checkbox" class="wk-check" value="${h.id}" ${sel.includes(h.id) ? 'checked' : ''} ${!sel.includes(h.id) && sel.length >= WEEK_MAX ? 'disabled' : ''}><span>${emo(h.emoji)}${esc(h.name)}</span></label>`).join('') || '<p class="hint">Noch keine Gewohnheiten angelegt.</p>'}</div>
+    <button type="button" class="btn primary block" data-sheet="close">Fertig</button>`);
+}
 function overviewHTML() {
   const avg = avg30(), st = streak(), best = longestStreak();
   const nh = state.habits.filter((h) => !h.archived).length;
@@ -871,6 +910,7 @@ function overviewHTML() {
         <div class="hero-streak ${st ? '' : 'off'}" role="img" aria-label="Aktuelle Serie: ${tageText(st)}"><span class="fire" aria-hidden="true">🔥</span><strong aria-hidden="true">${st}</strong></div>
       </div></section>
     <a class="cal-preview" href="#kalender" aria-label="Kalender öffnen">${miniCalHTML()}</a>
+    ${weekHTML()}
     <a class="card-row" href="#gewohnheiten"><div class="info"><div class="name">Gewohnheiten</div><div class="meta">${nh} aktiv · Erinnerungen</div></div>${icon('right')}</a>
   </div>`;
 }
@@ -1142,7 +1182,7 @@ function mergeSettings(rows) {                               // eine Zeile pro N
   const r = rows[0];
   if (!r) { if (state.settings.updated > 0) state.dirty.settings = true; return false; }
   const cts = Date.parse(r.updated_at);
-  if (cts > state.settings.updated) { state.settings = { dailyEnabled: !!r.daily_enabled, dailyTime: String(r.daily_time).slice(0, 5), updated: cts }; state.dirty.settings = false; return true; }
+  if (cts > state.settings.updated) { state.settings = { dailyEnabled: !!r.daily_enabled, dailyTime: String(r.daily_time).slice(0, 5), weekHabits: Array.isArray(r.week_habits) ? r.week_habits : null, updated: cts }; state.dirty.settings = false; return true; }
   if (state.settings.updated > cts) state.dirty.settings = true;
   return false;
 }
@@ -1195,7 +1235,7 @@ async function pushDirty() {
   await upsertChunks('logs', ls.map((l) => ({ user_id: uid, day: l.day, habit_id: l.id, count: l.count, skip: l.skip, updated_at: msToIso(l.ts) })), 'user_id,day,habit_id');
   if (state.dirty.settings) {
     const st = state.settings, sentAt = st.updated;
-    const { error } = await sb.from('user_settings').upsert([{ user_id: uid, daily_enabled: st.dailyEnabled, daily_time: st.dailyTime, updated_at: msToIso(st.updated) }], { onConflict: 'user_id' });
+    const { error } = await sb.from('user_settings').upsert([{ user_id: uid, daily_enabled: st.dailyEnabled, daily_time: st.dailyTime, week_habits: st.weekHabits, updated_at: msToIso(st.updated) }], { onConflict: 'user_id' });
     if (error) throw error;
     if (st.updated === sentAt) state.dirty.settings = false;
   }
@@ -1299,6 +1339,15 @@ sheet.addEventListener('click', (e) => {
     const r = reasonOf(b.dataset.reason);
     toast(`„${h.name}“ übersprungen (${r ? r.label : b.dataset.reason})`, undefined, { label: 'Rückgängig', run: () => setSkip(k, h, null) });
   }
+});
+sheet.addEventListener('change', (e) => {
+  if (!e.target.classList.contains('wk-check')) return;
+  let sel = weekIds();
+  sel = e.target.checked ? [...sel.filter((x) => x !== e.target.value), e.target.value] : sel.filter((x) => x !== e.target.value);
+  state.settings.weekHabits = sel; state.settings.updated = Date.now(); state.dirty.settings = true;
+  save(); queuePush(); render();
+  sheet.querySelectorAll('.wk-check').forEach((c) => { c.disabled = !c.checked && sel.length >= WEEK_MAX; });
+  $('#wk-count').textContent = `${sel.length} von ${WEEK_MAX} gewählt. Die Reihenfolge ist die Reihenfolge deiner Auswahl.`;
 });
 const ageDays = (h) => Math.round((parse(todayKey()) - parse(h.created)) / 864e5);
 function requestDelete(id) {
@@ -1446,6 +1495,7 @@ $('#view').addEventListener('click', (e) => {
     case 'unskip': setSkip(k, h, null); break;
     case 'todo-toggle': toggleTodo(el.dataset.id); break;
     case 'emoji-open': openPicker(el.dataset.target); break;
+    case 'week-pick': openWeekPicker(); break;
     case 'todo-new': location.hash = '#todo-neu'; break;
     case 'todo-edit': location.hash = '#todo-bearbeiten/' + el.dataset.id; break;
     case 'sub-toggle': toggleSub(el.dataset.id, el.dataset.sub); break;

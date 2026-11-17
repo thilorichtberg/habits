@@ -16,6 +16,7 @@ Ohne Anmeldung läuft alles lokal im Browser (Daten bleiben auf dem Gerät). Syn
 - Optionales Emoji als Symbol links neben dem Namen: Ein Fenster mit **allen Emojis** (3.583 inkl. Hauttöne) mit deutscher Suche und Kategorien. Bekannte Wörter im Namen („Wasser“ → 💧, „Zähne putzen“ → 🦷) setzen das passende Emoji sofort selbst ein
 - Tagesquote in Prozent, Serie (aktuell und längste)
 - Kalender mit Tagesbericht: abgeschlossen, versäumt, übersprungen
+- Übersicht mit Ø der letzten 30 Tage (heute eingeschlossen) und einer **7-Tage-Tabelle** für bis zu 10 selbst gewählte Gewohnheiten (geschafft, nicht geschafft, kein Termin)
 
 **To-Do**
 - Heute, Später und Erledigt (eingeklappt), Suche, Unterpunkte
@@ -78,7 +79,7 @@ Die App ist auf mein Supabase-Projekt eingestellt, dort ist die Registrierung au
 
 1. **Supabase-Projekt anlegen.** In den Einstellungen die Option „Automatically expose new tables" ausschalten (die Migrationen vergeben die Rechte ausdrücklich)
 2. **URL und Publishable Key** in `app.js` eintragen (`SUPABASE_URL`, `SUPABASE_KEY`)
-3. **Migrationen** im SQL Editor in dieser Reihenfolge ausführen: `schema.sql`, `push.sql`, `uhrzeit-vorlauf.sql`, `ueberspringen.sql`, `todos.sql`, `todo-unterpunkte.sql`, `emoji.sql`, `tagesreminder.sql`
+3. **Migrationen** im SQL Editor in dieser Reihenfolge ausführen: `schema.sql`, `push.sql`, `uhrzeit-vorlauf.sql`, `ueberspringen.sql`, `todos.sql`, `todo-unterpunkte.sql`, `emoji.sql`, `tagesreminder.sql`, `uebersicht-woche.sql`
 4. **Nutzer anlegen** (Authentication → Users, „Auto Confirm User") und danach „Allow new users to sign up" ausschalten
 5. **Push einrichten:**
    - VAPID-Schlüsselpaar erzeugen: `npx web-push generate-vapid-keys`. Den öffentlichen Schlüssel in `app.js` eintragen (`VAPID_PUBLIC_KEY`)

@@ -155,11 +155,10 @@ button { cursor: pointer; }
 /* ---------- Hero (Tagesübersicht: kompakt, feste Struktur, kein Layoutsprung) ---------- */
 .hero {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: var(--s4); row-gap: var(--s3);
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
-  padding: var(--s3) var(--s4); margin-bottom: var(--s4); box-shadow: var(--shadow);
+  border-bottom: 1px solid var(--border); padding: var(--s2) var(--s1) var(--s3); margin-bottom: var(--s4);
 }
-.hero-pct { font-size: 2rem; line-height: 1.1; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
-.hero-pct span { font-size: 1.25rem; margin-left: 2px; color: var(--muted); }
+.hero-pct { font-size: 2.75rem; line-height: 1.1; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.hero-pct span { font-size: 1.5rem; margin-left: 2px; color: var(--muted); }
 .hero-sub { color: var(--muted); font-size: .9375rem; }
 .hero-streak { display: flex; align-items: center; gap: 6px; font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
 .hero-streak .fire { font-size: 1.75rem; }
@@ -541,3 +540,32 @@ html:has(.form-page) { scroll-padding-bottom: calc(var(--tabbar-h) + 104px + env
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
 }
+
+/* ---------- Übersicht: 7-Tage-Tabelle ---------- */
+.week { margin: var(--s4) 0 var(--s3); }
+.week-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); margin-bottom: var(--s2); }
+.week-head h2 { font-size: 1.0625rem; }
+.week-table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+.week-table th, .week-table td { padding: 0; text-align: center; font-weight: 400; }
+.week-table thead td:first-child, .week-table .wname { width: 34%; }
+.week-table thead th { padding-bottom: var(--s1); color: var(--muted); font-size: .75rem; line-height: 1.2; }
+.week-table thead th .wd, .week-table thead th .dn { display: block; }
+.week-table thead th .dn { font-size: .9375rem; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.week-table thead th.today .dn { color: var(--accent); }
+.week-table thead th.today .wd { color: var(--accent); font-weight: 700; }
+.week-table .wname { text-align: left; font-size: .9375rem; font-weight: 600; padding-right: var(--s2); }
+.week-table .wname span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.week-table tbody td, .week-table tbody th { height: 36px; }
+.wc .dot { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; vertical-align: middle; }
+.wc .dot svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.wc.ok .dot { background: var(--accent); color: var(--bg); }
+.wc.miss .dot { background: color-mix(in srgb, var(--danger) 26%, transparent); }
+.wc.open .dot { border: 2px solid color-mix(in srgb, var(--danger) 45%, transparent); }
+.wc.na .dot { color: var(--muted); opacity: .55; }
+.wc.na .dot svg { width: 14px; height: 14px; }
+.week-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); margin-top: var(--s2); color: var(--muted); font-size: .8125rem; }
+.week-legend .lg { display: inline-grid; place-items: center; width: 12px; height: 12px; border-radius: 50%; margin-right: -2px; }
+.week-legend .lg.ok { background: var(--accent); }
+.week-legend .lg.miss { background: color-mix(in srgb, var(--danger) 26%, transparent); }
+.week-legend .lg.na svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2.4; opacity: .7; }
+.week-pick { display: grid; gap: var(--s1); margin: var(--s2) 0 var(--s3); max-height: 50vh; overflow: auto; }
