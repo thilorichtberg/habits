@@ -64,6 +64,26 @@ function dueOccurrences(habits: any[], day: string, minutes: number, lateMin = 1
   }
   return out;
 }
+
+// Tägliche Sammel-Erinnerung: ist die eingestellte Uhrzeit gerade erreicht (höchstens lateMin Minuten zurück)?
+function dailyDue(minutes: number, time: string, lateMin = 10) {
+  const [H, M] = String(time).split(':').map(Number);
+  const late = minutes - (H * 60 + M);
+  return late >= 0 && late <= lateMin;
+}
+// Welche Habits sind heute noch offen? Geplant für heute, nicht erledigt und nicht übersprungen
+// (Übersprungenes hat der Nutzer bewusst entschieden, dafür gibt es keine Erinnerung).
+function dailyOpenHabits(habits: any[], logs: any[], day: string, weekday: number) {
+  const byHabit = new Map(logs.map((l) => [l.habit_id, l]));
+  return habits.filter((h) => {
+    if (!h.days.includes(weekday)) return false;
+    if (h.created > day) return false;
+    if (h.archived && h.archived <= day) return false;
+    const l = byHabit.get(h.id);
+    if (l && l.skip) return false;
+    return !(l && l.count >= h.target);
+  });
+}
 // --- Ende Fälligkeit ---
 
 const fmtLead = (b: number) => {
@@ -113,12 +133,38 @@ Deno.serve(async (req) => {
   const byUser = new Map<string, any[]>();
   for (const s of subs ?? []) byUser.set(s.user_id, [...(byUser.get(s.user_id) ?? []), s]);
 
+  // Einstellungen der täglichen Erinnerung (ohne Zeile: Standard an um 20:00). Ein Lesefehler darf die übrigen Erinnerungen nie stören.
+  const { data: setRows } = await db.from('user_settings').select('*');
+  const settings = new Map((setRows ?? []).map((r: any) => [r.user_id, r]));
+
   let sent = 0;
   for (const [uid, list] of byUser) {
-    const { day, minutes } = localParts(list[0].tz);
+    const { day, minutes, weekday } = localParts(list[0].tz);
+
+    // ---- Tägliche Sammel-Erinnerung ----
+    const cfg: any = settings.get(uid) ?? { daily_enabled: true, daily_time: '20:00:00' };
+    if (cfg.daily_enabled && dailyDue(minutes, cfg.daily_time, LATE_MIN)) {
+      const { data: all } = await db.from('habits').select('id,name,emoji,target,days,created,archived').eq('user_id', uid).lte('created', day);
+      const { data: todayLogs } = await db.from('logs').select('habit_id,count,skip').eq('user_id', uid).eq('day', day);
+      const open = dailyOpenHabits(all ?? [], todayLogs ?? [], day, weekday);
+      if (open.length) {
+        const { data: claimed } = await db.from('reminders_sent')
+          .upsert({ user_id: uid, day, habit_id: '__daily__' }, { onConflict: 'user_id,day,habit_id', ignoreDuplicates: true })
+          .select();
+        if (claimed?.length) {
+          const names = open.slice(0, 3).map((h: any) => (h.emoji ? h.emoji + ' ' : '') + h.name).join(', ');
+          const payload = JSON.stringify({
+            title: 'Noch offen heute',
+            body: `${open.length} ${open.length === 1 ? 'Habit' : 'Habits'}: ${names}${open.length > 3 ? ' …' : ''}`,
+            tag: 'daily-' + day,
+          });
+          for (const s of list) sent += await send(s, payload);
+        }
+      }
+    }
 
     const { data: habits } = await db.from('habits')
-      .select('id,name,target,days,at_time,remind_before,created,archived')
+      .select('id,name,emoji,target,days,at_time,remind_before,created,archived')
       .eq('user_id', uid).not('at_time', 'is', null).not('remind_before', 'is', null).lte('created', day);
 
     const due = dueOccurrences(habits ?? [], day, minutes, LATE_MIN);
@@ -144,7 +190,7 @@ Deno.serve(async (req) => {
         : occDay === dayStr(dayNum(day) + 1) ? 'morgen um '
         : `am ${new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(dayNum(occDay) * 86400000))} um `;
       const payload = JSON.stringify({
-        title: h.name,
+        title: (h.emoji ? h.emoji + ' ' : '') + h.name,
         body: (b > 0 ? `In ${fmtLead(b)}, ${when}${t} Uhr.` : `Jetzt, ${t} Uhr.`) + (h.target > 1 ? ` Ziel: ${h.target}×` : ''),
         tag: 'habit-' + h.id + '-' + occDay,
       });
