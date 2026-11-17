@@ -14,12 +14,14 @@ Ohne Anmeldung läuft alles lokal im Browser (Daten bleiben auf dem Gerät). Syn
 - Uhrzeit mit Erinnerung zur Uhrzeit oder **beliebig lange vorher** (Minuten bis 14 Tage)
 - Wischgesten: nach links löschen (mit Rückfrage und „Wiederherstellen"), nach rechts **überspringen mit Grund**. „Krankheit" zählt weder als verpasst noch in die Quote
 - Optionales Emoji als Symbol links neben dem Namen: Ein Fenster mit **allen Emojis** (3.583 inkl. Hauttöne) mit deutscher Suche und Kategorien. Bekannte Wörter im Namen („Wasser“ → 💧, „Zähne putzen“ → 🦷) setzen das passende Emoji sofort selbst ein
+- Optionale Beschreibung (bis 500 Zeichen). **Lange auf eine Zeile drücken** vergrößert sie als Karte in die Bildschirmmitte, mit Details und Beschreibung; für Tastatur und Screenreader gibt es dazu den Knopf „Details anzeigen“
 - Tagesquote in Prozent, Serie (aktuell und längste)
 - Kalender mit Tagesbericht: abgeschlossen, versäumt, übersprungen
 - Übersicht mit Ø der letzten 30 Tage (heute eingeschlossen) und einer **7-Tage-Tabelle** für bis zu 10 selbst gewählte Gewohnheiten (geschafft, nicht geschafft, kein Termin)
 
 **To-Do**
-- Heute, Später und Erledigt (eingeklappt), Suche, Unterpunkte
+- Heute, Später und Erledigt (eingeklappt), Suche, Unterpunkte (standardmäßig eingeklappt, Tippen auf den Zähler klappt auf), Beschreibung
+- Presets löschen fragt vorher nach
 - Presets: Aufgaben samt Unterpunkten als Vorlage speichern und wieder laden
 - Zählt bewusst nicht zur Habit-Quote
 
@@ -79,7 +81,7 @@ Die App ist auf mein Supabase-Projekt eingestellt, dort ist die Registrierung au
 
 1. **Supabase-Projekt anlegen.** In den Einstellungen die Option „Automatically expose new tables" ausschalten (die Migrationen vergeben die Rechte ausdrücklich)
 2. **URL und Publishable Key** in `app.js` eintragen (`SUPABASE_URL`, `SUPABASE_KEY`)
-3. **Migrationen** im SQL Editor in dieser Reihenfolge ausführen: `schema.sql`, `push.sql`, `uhrzeit-vorlauf.sql`, `ueberspringen.sql`, `todos.sql`, `todo-unterpunkte.sql`, `emoji.sql`, `tagesreminder.sql`, `uebersicht-woche.sql`
+3. **Migrationen** im SQL Editor in dieser Reihenfolge ausführen: `schema.sql`, `push.sql`, `uhrzeit-vorlauf.sql`, `ueberspringen.sql`, `todos.sql`, `todo-unterpunkte.sql`, `emoji.sql`, `tagesreminder.sql`, `uebersicht-woche.sql`, `beschreibungen.sql`
 4. **Nutzer anlegen** (Authentication → Users, „Auto Confirm User") und danach „Allow new users to sign up" ausschalten
 5. **Push einrichten:**
    - VAPID-Schlüsselpaar erzeugen: `npx web-push generate-vapid-keys`. Den öffentlichen Schlüssel in `app.js` eintragen (`VAPID_PUBLIC_KEY`)

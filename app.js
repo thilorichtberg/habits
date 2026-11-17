@@ -27,6 +27,7 @@ const fmt = (o) => new Intl.DateTimeFormat('de-DE', o);
 /* ---------- Icons (Lucide-Stil, 24px, Strich 2) ---------- */
 const ICONS = {
   check: '<path d="M20 6 9 17l-5-5"/>',
+  note: '<path d="M17 10H3M21 6H3M21 14H3M17 18H3"/>',
   plus: '<path d="M5 12h14M12 5v14"/>',
   minus: '<path d="M5 12h14"/>',
   left: '<path d="m15 18-6-6 6-6"/>',
@@ -68,6 +69,7 @@ function firstGrapheme(str) {                                // genau ein Zeiche
   return [...str][0] || '';
 }
 const cleanEmoji = (v) => { const g = firstGrapheme(v); return EMOJI_RE.test(g) ? g : ''; };   // Buchstaben und Ziffern werden verworfen
+const noteMark = (d) => (d ? `<span class="note-mark" aria-hidden="true">${icon('note')}</span><span class="sr">, mit Beschreibung</span>` : '');
 const emo = (e) => (e ? `<span class="emoji" aria-hidden="true">${esc(e)}</span>` : '');
 const HABIT_EMOJIS = ['💧', '🏃', '🧘', '📚', '🍎', '🥗', '💊', '😴', '🧹', '🦷', '🚴', '🏋️', '✍️', '🌞', '🧠', '🎯'];
 const TODO_EMOJIS = ['🛒', '📞', '📧', '💼', '🏠', '💳', '📦', '🎁', '🧾', '✈️', '🔧', '🐶', '📅', '🧺', '🎓', '❤️'];
@@ -292,6 +294,7 @@ function migrateHabits(list) {
       delete h.remind;
     }
     if (h.emoji === undefined) h.emoji = '';
+    if (h.desc === undefined) h.desc = '';
     if (h.time === undefined) h.time = '';
     if (h.before === undefined) h.before = null;
   }
@@ -320,7 +323,7 @@ function load() {
     const r = JSON.parse(localStorage.getItem(KEY));
     if (r && Array.isArray(r.habits)) {
       const dirty = r.dirty || {};
-      return { habits: migrateHabits(r.habits), log: r.log || {}, skip: r.skip || {}, todos: (r.todos || []).map((t) => ({ ...t, subs: t.subs || [], emoji: t.emoji || '' })), presets: r.presets || [], settings: { ...defaultSettings(), ...(r.settings || {}) }, ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {}, todos: dirty.todos || {}, presets: dirty.presets || {}, settings: !!dirty.settings }, notified: r.notified || {} };
+      return { habits: migrateHabits(r.habits), log: r.log || {}, skip: r.skip || {}, todos: (r.todos || []).map((t) => ({ ...t, subs: t.subs || [], emoji: t.emoji || '', desc: t.desc || '' })), presets: r.presets || [], settings: { ...defaultSettings(), ...(r.settings || {}) }, ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {}, todos: dirty.todos || {}, presets: dirty.presets || {}, settings: !!dirty.settings }, notified: r.notified || {} };
     }
   } catch (e) { /* leer starten */ }
   return emptyState();
@@ -424,6 +427,15 @@ function saveTodoPreset(name, subTexts, emoji = '') {                    // glei
   state.presets.push(p);
   touchPreset(p);
 }
+function askRemovePreset(id) {
+  const p = state.presets.find((x) => x.id === id && !x.deleted);
+  if (!p) return;
+  sheetCtx = { presetId: id };
+  openSheet(`<h2 id="sheet-title">Preset „${esc(p.name)}“ löschen?</h2>
+    <p class="sheet-text">Die Vorlage ist danach weg. Aufgaben, die du schon daraus angelegt hast, bleiben erhalten. Direkt danach kannst du das Löschen rückgängig machen.</p>
+    <button type="button" class="btn danger armed block" data-sheet="confirm-preset-del">Löschen</button>
+    <button type="button" class="btn ghost block" data-sheet="close">Abbrechen</button>`);
+}
 function removePreset(id) {
   const p = state.presets.find((x) => x.id === id);
   if (!p) return;
@@ -440,13 +452,14 @@ function toggleSub(todoId, subId) {
 }
 // ---- Seite "Neue Aufgabe" / "Aufgabe bearbeiten": Titel, Unterpunkte, Bereich, Preset
 function newTodoDraft(t) {
-  return t ? { text: t.text, emoji: t.emoji || '', emojiManual: true, subs: t.subs.map((s) => ({ ...s })), list: t.list, savePreset: false }
-           : { text: '', emoji: '', emojiManual: false, subs: [], list: 'today', savePreset: false };
+  return t ? { text: t.text, desc: t.desc || '', emoji: t.emoji || '', emojiManual: true, subs: t.subs.map((s) => ({ ...s })), list: t.list, savePreset: false }
+           : { text: '', desc: '', emoji: '', emojiManual: false, subs: [], list: 'today', savePreset: false };
 }
 function syncTodoDraft() {                                   // DOM → Entwurf
   if (!todoForm || !$('#todo-edit-form')) return;
   const prev = new Map(todoForm.subs.map((s) => [s.id, s]));
   todoForm.text = $('#tf-text').value;
+  todoForm.desc = $('#tf-desc').value;
   todoForm.emoji = cleanEmoji($('#tf-emoji').value);
   todoForm.emojiManual = $('.symbol-btn[data-target="tf-emoji"]').dataset.manual === '1';
   todoForm.subs = [...document.querySelectorAll('#todo-edit-form .sub-input')].map((i) => ({ id: i.dataset.sid, text: i.value, done: !!(prev.get(i.dataset.sid) || {}).done }));
@@ -480,6 +493,7 @@ function applyPreset(id) {
 function submitTodo() {
   syncTodoDraft();
   const text = todoForm.text.trim().slice(0, 200);
+  const desc = todoForm.desc.trim().slice(0, 500);
   if (!text) {
     const er = $('#tf-err');
     er.textContent = 'Bitte gib einen Titel ein.'; er.hidden = false;
@@ -490,11 +504,11 @@ function submitTodo() {
   const wasEdit = !!editingTodoId;
   if (wasEdit) {
     const t = findTodo(editingTodoId);
-    Object.assign(t, { text, emoji: todoForm.emoji, subs, list: todoForm.list });
+    Object.assign(t, { text, desc, emoji: todoForm.emoji, subs, list: todoForm.list });
     touchTodo(t);
   } else {
     const now = Date.now();
-    const t = { id: 't' + now.toString(36) + Math.random().toString(36).slice(2, 5), text, emoji: todoForm.emoji, subs, list: todoForm.list, done: false, deleted: false, created: now, updated: now };
+    const t = { id: 't' + now.toString(36) + Math.random().toString(36).slice(2, 5), text, desc, emoji: todoForm.emoji, subs, list: todoForm.list, done: false, deleted: false, created: now, updated: now };
     state.todos.push(t);
     touchTodo(t);
   }
@@ -623,7 +637,7 @@ function todayHTML() {
 
   let main;
   if (!hs.length) main = `<div class="empty"><h2>Für diesen Tag ist nichts geplant</h2><p>Heute ist Pause.</p></div>`;
-  else if (open.length) main = `<ul class="list">${open.map((h) => habitRow(k, h, isFuture, canSwipe)).join('')}</ul>${canSwipe ? `<p class="hint swipe-hint">Nach links wischen löscht, nach rechts überspringt.</p>` : ''}`;
+  else if (open.length) main = `<ul class="list">${open.map((h) => habitRow(k, h, isFuture, canSwipe)).join('')}</ul>${canSwipe ? `<p class="hint swipe-hint">Nach links wischen löscht, nach rechts überspringt. Lange drücken zeigt Details.</p>` : ''}`;
   else main = `<div class="empty compact"><h2>Nichts mehr offen</h2><p>Gut gemacht.</p></div>`;
 
   const folds = foldHTML('skip', 'Übersprungen', skipped, (h) => skippedRow(k, h, isFuture)) + foldHTML('done', 'Erledigt', done, (h) => habitRow(k, h, isFuture, false));
@@ -644,9 +658,9 @@ function habitInner(k, h, disabled) {
   const meta = h.time ? `${icon('clock')} ${esc(h.time)}${h.before !== null ? `${icon('bell')}<span class="sr">, mit Erinnerung</span>` : ''}` : '';
   // Nur der Kreis links schließt den Habit ab. Der Rest der Zeile (Name, Zeit, freie Fläche) öffnet die Bearbeitung.
   const check = `<button type="button" class="habit-check" data-action="toggle" data-id="${h.id}" data-fid="t-${h.id}" aria-pressed="${isDone}" aria-label="${esc(h.name)}: ${isDone ? 'wieder öffnen' : 'als erledigt markieren'}" ${disabled ? 'disabled' : ''}><span class="check" aria-hidden="true">${icon('check')}</span></button>`;
-  const info = `<a class="info habit-main" draggable="false" href="#bearbeiten/${h.id}" data-fid="m-${h.id}"><div class="name">${emo(h.emoji)}${esc(h.name)}</div>${meta ? `<div class="meta">${meta}</div>` : ''}</a>`;
-  if (h.target === 1) return `<div class="habit ${isDone ? 'done' : ''}">${check}${info}</div>`;
-  return `<div class="habit ${isDone ? 'done' : ''}">${check}${info}
+  const info = `<a class="info habit-main" draggable="false" href="#bearbeiten/${h.id}" data-fid="m-${h.id}"><div class="name">${emo(h.emoji)}${esc(h.name)}${noteMark(h.desc)}</div>${meta ? `<div class="meta">${meta}</div>` : ''}</a>`;
+  if (h.target === 1) return `<div class="habit ${isDone ? 'done' : ''}" data-peek="habit:${h.id}">${check}${info}</div>`;
+  return `<div class="habit ${isDone ? 'done' : ''}" data-peek="habit:${h.id}">${check}${info}
     <div class="counter">
       <button class="icon-btn" data-action="dec" data-id="${h.id}" data-fid="d-${h.id}" aria-label="${esc(h.name)}: eins weniger" ${c === 0 || disabled ? 'disabled' : ''}>${icon('minus')}</button>
       <span class="count">${c}<span class="sr"> von </span><span aria-hidden="true">/</span>${h.target}</span>
@@ -663,11 +677,11 @@ function swipeRow(h, inner, skip) {
     ${skip ? `<div class="swipe-bg skip" aria-hidden="true">${icon('skip')}</div>` : ''}
     <div class="swipe-bg del" aria-hidden="true">${icon('trash')}</div>
     <div class="swipe-front">${inner}</div>
-    <div class="swipe-alt">${skip ? `<button type="button" class="sr-btn" data-action="skip-ask" data-id="${h.id}">${esc(h.name)} überspringen</button>` : ''}<button type="button" class="sr-btn" data-action="del-ask" data-id="${h.id}">${esc(h.name)} löschen</button></div></li>`;
+    <div class="swipe-alt"><button type="button" class="sr-btn" data-action="peek-open" data-ref="habit:${h.id}">${esc(h.name)} Details anzeigen</button>${skip ? `<button type="button" class="sr-btn" data-action="skip-ask" data-id="${h.id}">${esc(h.name)} überspringen</button>` : ''}<button type="button" class="sr-btn" data-action="del-ask" data-id="${h.id}">${esc(h.name)} löschen</button></div></li>`;
 }
 function skippedRow(k, h, disabled) {
   const r = reasonOf(skipOf(k, h.id));
-  return `<li><div class="habit skipped"><span class="habit-check static" aria-hidden="true"><span class="check skip-mark">${icon('skip')}</span></span>
+  return `<li><div class="habit skipped" data-peek="habit:${h.id}"><span class="habit-check static" aria-hidden="true"><span class="check skip-mark">${icon('skip')}</span></span>
     <a class="info habit-main" draggable="false" href="#bearbeiten/${h.id}" data-fid="m-${h.id}"><div class="name">${emo(h.emoji)}${esc(h.name)}</div><div class="meta">${esc(r ? r.label : skipOf(k, h.id))}${r && r.excused ? ' · zählt nicht zur Quote' : ''}</div></a>
     <button type="button" class="btn ghost small" data-action="unskip" data-id="${h.id}" data-fid="u-${h.id}" ${disabled ? 'disabled' : ''}>Rückgängig</button></div></li>`;
 }
@@ -754,8 +768,8 @@ function reportHTML() {
 
 /* ---------- Neu / Bearbeiten (ganze Seite statt Dialog) ---------- */
 function newDraft(h) {
-  const d = h ? { name: h.name, emoji: h.emoji || '', emojiManual: true, target: h.target, days: [...h.days], time: h.time || '', before: h.time ? h.before : null }
-              : { name: '', emoji: '', emojiManual: false, target: 1, days: [...WEEK], time: '', before: null };
+  const d = h ? { name: h.name, desc: h.desc || '', emoji: h.emoji || '', emojiManual: true, target: h.target, days: [...h.days], time: h.time || '', before: h.time ? h.before : null }
+              : { name: '', desc: '', emoji: '', emojiManual: false, target: 1, days: [...WEEK], time: '', before: null };
   d.custom = d.before !== null && !PRESETS.includes(d.before);   // Wert außerhalb der Auswahl → "Eigene Zeit"
   const cp = d.custom ? customParts(d.before) : { n: 1, u: 1440 };
   d.cn = cp.n; d.cu = cp.u;
@@ -764,6 +778,7 @@ function newDraft(h) {
 function syncDraft() {                                       // DOM → Entwurf
   if (!draft || !$('#habit-form')) return;
   draft.name = $('#f-name').value;
+  draft.desc = $('#f-desc').value;
   draft.emoji = cleanEmoji($('#f-emoji').value);
   draft.emojiManual = $('.symbol-btn[data-target="f-emoji"]').dataset.manual === '1';
   draft.target = parseInt($('#f-target').value, 10) || 1;
@@ -791,6 +806,9 @@ function formHTML() {
       <div class="field"><label for="f-name">Name</label>
         ${symbolFieldHTML('f-emoji', d.emoji, d.emojiManual, `<input id="f-name" type="text" maxlength="40" autocomplete="off" enterkeyhint="done" placeholder="z. B. 2 Bananen essen" value="${esc(d.name)}" ${formErr ? 'aria-invalid="true" aria-describedby="f-name-err"' : ''}>`)}
         <p class="error" id="f-name-err" role="alert" ${formErr ? '' : 'hidden'}>${esc(formErr)}</p></div>
+      <div class="field"><label for="f-desc">Beschreibung (optional)</label>
+        <textarea id="f-desc" rows="3" maxlength="500" placeholder="Warum ist dir das wichtig? Wie genau machst du es?" aria-describedby="f-desc-hint">${esc(d.desc)}</textarea>
+        <p class="hint" id="f-desc-hint">Lange auf die Gewohnheit drücken zeigt sie groß an.</p></div>
       <div class="field"><label for="f-target">Ziel pro Tag</label>
         <div class="stepper">
           <button type="button" data-step="-1" aria-label="Ziel verringern">${icon('minus')}</button>
@@ -928,8 +946,8 @@ function habitsHTML() {
     body = hs.length
       ? `<ul class="list">${hs.map((h) => `<li class="swipe" data-id="${h.id}" data-right="0">
           <div class="swipe-bg del" aria-hidden="true">${icon('trash')}</div>
-          <div class="swipe-front"><a class="card-row" draggable="false" href="#bearbeiten/${h.id}" data-fid="e-${h.id}">
-          <div class="info"><div class="name">${emo(h.emoji)}${esc(h.name)}</div>
+          <div class="swipe-front"><a class="card-row" draggable="false" href="#bearbeiten/${h.id}" data-fid="e-${h.id}" data-peek="habit:${h.id}">
+          <div class="info"><div class="name">${emo(h.emoji)}${esc(h.name)}${noteMark(h.desc)}</div>
           <div class="meta">${h.target > 1 ? `Ziel ${h.target} · ` : ''}${daysLabel(h.days)}${h.time ? ` · ${esc(h.time)} Uhr` : ''}</div></div>${icon('right')}</a></div>
           <div class="swipe-alt"><button type="button" class="sr-btn" data-action="del-ask" data-id="${h.id}">${esc(h.name)} löschen</button></div></li>`).join('')}</ul>
         <p class="hint swipe-hint">Nach links wischen löscht.</p>`
@@ -937,7 +955,7 @@ function habitsHTML() {
   } else {
     const rs = hs.filter((h) => h.time && h.before !== null).sort((a, b) => remindAt(a).localeCompare(remindAt(b)));
     body = rs.length
-      ? `<ul class="list">${rs.map((h) => `<li><a class="card-row" href="#bearbeiten/${h.id}" data-fid="r-${h.id}">
+      ? `<ul class="list">${rs.map((h) => `<li><a class="card-row" href="#bearbeiten/${h.id}" data-fid="r-${h.id}" data-peek="habit:${h.id}">
           <span class="rem-time">${remindAt(h)}</span>
           <div class="info"><div class="name">${emo(h.emoji)}${esc(h.name)}</div><div class="meta">${h.before === 0 ? 'Um' : beforeText(h.before) + ' ·'} ${esc(h.time)} Uhr</div><div class="meta">${daysLabel(h.days)}</div></div>${icon('right')}</a></li>`).join('')}</ul>`
       : `<div class="empty"><h2>Noch keine Erinnerungen</h2><p>Lege beim Anlegen oder Bearbeiten einer Gewohnheit eine Uhrzeit fest und wähle, wie lange vorher du erinnert werden willst.</p></div>`;
@@ -971,27 +989,30 @@ function todoResultsHTML() {
   if (q && !all.length) return `<p class="todo-empty">Keine Treffer für „${esc(todoQuery.trim())}“.</p>`;
   return `${section('t-today', 'Heute', today, q ? 'Keine Treffer.' : 'Nichts für heute.')}
     ${section('t-later', 'Später', later, q ? 'Keine Treffer.' : 'Leer. Nach rechts wischen schiebt eine Aufgabe hierher.')}
-    ${all.length ? '<p class="hint swipe-hint">Nach rechts wischen verschiebt zwischen Heute und Später, nach links löscht.</p>' : ''}
+    ${all.length ? '<p class="hint swipe-hint">Nach rechts wischen verschiebt zwischen Heute und Später, nach links löscht. Lange drücken zeigt Details.</p>' : ''}
     ${foldHTML('tdone', 'Erledigt', done, todoRow)}`;
 }
+const openSubs = new Set();                                  // Aufgaben mit aufgeklappten Unterpunkten (Standard: eingeklappt, gilt nur bis zum Neuladen)
 function todoRow(t) {
   const subs = t.subs || [];
   const nDone = subs.filter((x) => x.done).length;
-  const inner = `<div class="todo ${t.done ? 'done' : ''}">
+  const q = todoQuery.trim().toLowerCase();
+  const isOpen = openSubs.has(t.id) || (!!q && subs.some((x) => x.text.toLowerCase().includes(q)));   // Treffer in einem Unterpunkt zeigt ihn gleich
+  const inner = `<div class="todo ${t.done ? 'done' : ''}" data-peek="todo:${t.id}">
     <div class="todo-main">
       <button type="button" class="todo-check" data-action="todo-toggle" data-id="${t.id}" data-fid="tc-${t.id}" aria-pressed="${t.done}" aria-label="${esc(t.text)}: ${t.done ? 'wieder öffnen' : 'als erledigt markieren'}"><span class="check" aria-hidden="true">${icon('check')}</span></button>
-      <button type="button" class="todo-text" data-action="todo-edit" data-id="${t.id}" data-fid="te-${t.id}">${emo(t.emoji)}${esc(t.text)}</button>
-      ${subs.length ? `<span class="todo-progress ${nDone === subs.length ? 'all' : ''}" role="img" aria-label="${nDone} von ${subs.length} Unterpunkten erledigt">${nDone}/${subs.length}</span>` : ''}
+      <button type="button" class="todo-text" data-action="todo-edit" data-id="${t.id}" data-fid="te-${t.id}">${emo(t.emoji)}${esc(t.text)}${noteMark(t.desc)}</button>
+      ${subs.length ? `<button type="button" class="todo-progress ${nDone === subs.length ? 'all' : ''}" data-action="subs-toggle" data-id="${t.id}" data-fid="tp-${t.id}" aria-expanded="${isOpen}" aria-controls="subs-${t.id}" aria-label="Unterpunkte, ${nDone} von ${subs.length} erledigt"><span aria-hidden="true">${nDone}/${subs.length}</span>${icon('right', 'chev')}</button>` : ''}
     </div>
-    ${subs.length ? `<ul class="subs">${subs.map((x) => `<li class="sub ${x.done ? 'done' : ''}">
+    ${subs.length ? `<div class="subs-wrap ${isOpen ? 'open' : ''}"><ul class="subs" id="subs-${t.id}">${subs.map((x) => `<li class="sub ${x.done ? 'done' : ''}">
       <button type="button" class="sub-check" data-action="sub-toggle" data-id="${t.id}" data-sub="${x.id}" data-fid="sc-${x.id}" aria-pressed="${x.done}" aria-label="${esc(x.text)}: ${x.done ? 'wieder öffnen' : 'als erledigt markieren'}"><span class="check small" aria-hidden="true">${icon('check')}</span></button>
-      <span class="sub-text">${esc(x.text)}</span></li>`).join('')}</ul>` : ''}</div>`;
+      <span class="sub-text">${esc(x.text)}</span></li>`).join('')}</ul></div>` : ''}</div>`;
   const target = t.list === 'today' ? 'Später' : 'Heute';
   return `<li class="swipe" data-kind="todo" data-id="${t.id}" data-right="${t.done ? 0 : 1}">
     ${t.done ? '' : `<div class="swipe-bg skip" aria-hidden="true">${icon(t.list === 'today' ? 'clock' : 'calendar')}</div>`}
     <div class="swipe-bg del" aria-hidden="true">${icon('trash')}</div>
     <div class="swipe-front">${inner}</div>
-    <div class="swipe-alt">${t.done ? '' : `<button type="button" class="sr-btn" data-action="todo-move" data-id="${t.id}">${esc(t.text)} nach ${target} verschieben</button>`}<button type="button" class="sr-btn" data-action="todo-del" data-id="${t.id}">${esc(t.text)} löschen</button></div></li>`;
+    <div class="swipe-alt"><button type="button" class="sr-btn" data-action="peek-open" data-ref="todo:${t.id}">${esc(t.text)} Details anzeigen</button>${t.done ? '' : `<button type="button" class="sr-btn" data-action="todo-move" data-id="${t.id}">${esc(t.text)} nach ${target} verschieben</button>`}<button type="button" class="sr-btn" data-action="todo-del" data-id="${t.id}">${esc(t.text)} löschen</button></div></li>`;
 }
 
 /* ---------- Seite: Neue Aufgabe / Aufgabe bearbeiten ---------- */
@@ -1012,6 +1033,9 @@ function todoFormHTML() {
       <div class="field"><label for="tf-text">Aufgabe</label>
         ${symbolFieldHTML('tf-emoji', d.emoji, d.emojiManual, `<input id="tf-text" type="text" maxlength="200" autocomplete="off" enterkeyhint="done" placeholder="z. B. Koffer packen" value="${esc(d.text)}">`)}
         <p class="error" id="tf-err" role="alert" hidden></p></div>
+      <div class="field"><label for="tf-desc">Beschreibung (optional)</label>
+        <textarea id="tf-desc" rows="3" maxlength="500" placeholder="Notizen, Details, Links …" aria-describedby="tf-desc-hint">${esc(d.desc)}</textarea>
+        <p class="hint" id="tf-desc-hint">Lange auf die Aufgabe drücken zeigt sie groß an.</p></div>
       <fieldset class="field"><legend>Unterpunkte</legend>
         ${d.subs.length ? `<ul class="sub-edit-list">${d.subs.map((x, i) => `<li class="sub-edit"><input type="text" class="sub-input" maxlength="200" data-sid="${x.id}" value="${esc(x.text)}" placeholder="Unterpunkt" aria-label="Unterpunkt ${i + 1}" enterkeyhint="next" autocomplete="off">
           <button type="button" class="icon-btn" data-action="sub-del" data-sid="${x.id}" aria-label="Unterpunkt ${i + 1} entfernen">${icon('x')}</button></li>`).join('')}</ul>` : ''}
@@ -1134,7 +1158,7 @@ function timeFromCloud(r) {                                  // neue Spalten at_
   return { time: t ? t.slice(0, 5) : '', before: t ? before : null };
 }
 function habitFromCloud(r) {
-  return { id: r.id, name: r.name, emoji: r.emoji || '', target: r.target, days: r.days, ...timeFromCloud(r), created: r.created, archived: r.archived || null, updated: Date.parse(r.updated_at) };
+  return { id: r.id, name: r.name, emoji: r.emoji || '', desc: r.description || '', target: r.target, days: r.days, ...timeFromCloud(r), created: r.created, archived: r.archived || null, updated: Date.parse(r.updated_at) };
 }
 function setLocalCount(day, id, n) {
   const d = (state.log[day] = state.log[day] || {});
@@ -1158,7 +1182,7 @@ function setLocalSkip(day, id, reason) {
   if (!Object.keys(d).length) delete state.skip[day];
 }
 function todoFromCloud(r) {
-  return { id: r.id, text: r.text, list: r.list, done: !!r.done, deleted: !!r.deleted, emoji: r.emoji || '', subs: Array.isArray(r.subs) ? r.subs : [], created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
+  return { id: r.id, text: r.text, list: r.list, done: !!r.done, deleted: !!r.deleted, emoji: r.emoji || '', desc: r.description || '', subs: Array.isArray(r.subs) ? r.subs : [], created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
 }
 function presetFromCloud(r) {
   return { id: r.id, name: r.name, emoji: r.emoji || '', subs: Array.isArray(r.subs) ? r.subs : [], deleted: !!r.deleted, created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
@@ -1227,9 +1251,9 @@ async function pushDirty() {
   const uid = cloud.user.id;
   const hs = state.habits.filter((h) => state.dirty.habits[h.id]);
   const ls = Object.keys(state.dirty.logs).map((k) => { const [day, id] = splitKey(k); return { k, day, id, ts: state.ts[k] || 0, count: count(day, id), skip: skipOf(day, id) }; });
-  await upsertChunks('habits', hs.map((h) => ({ user_id: uid, id: h.id, name: h.name, emoji: h.emoji || null, target: h.target, days: h.days, at_time: h.time || null, remind_before: h.time && h.before != null ? h.before : null, remind: null, created: h.created, archived: h.archived || null, updated_at: msToIso(h.updated) })), 'user_id,id');
+  await upsertChunks('habits', hs.map((h) => ({ user_id: uid, id: h.id, name: h.name, emoji: h.emoji || null, description: h.desc || null, target: h.target, days: h.days, at_time: h.time || null, remind_before: h.time && h.before != null ? h.before : null, remind: null, created: h.created, archived: h.archived || null, updated_at: msToIso(h.updated) })), 'user_id,id');
   const ts = state.todos.filter((t) => state.dirty.todos[t.id]);
-  await upsertChunks('todos', ts.map((t) => ({ user_id: uid, id: t.id, text: t.text, emoji: t.emoji || null, list: t.list, done: t.done, deleted: t.deleted, subs: t.subs || [], created_at: msToIso(t.created), updated_at: msToIso(t.updated) })), 'user_id,id');
+  await upsertChunks('todos', ts.map((t) => ({ user_id: uid, id: t.id, text: t.text, emoji: t.emoji || null, description: t.desc || null, list: t.list, done: t.done, deleted: t.deleted, subs: t.subs || [], created_at: msToIso(t.created), updated_at: msToIso(t.updated) })), 'user_id,id');
   const ps = state.presets.filter((p) => state.dirty.presets[p.id]);
   await upsertChunks('todo_presets', ps.map((p) => ({ user_id: uid, id: p.id, name: p.name, emoji: p.emoji || null, subs: p.subs, deleted: p.deleted, created_at: msToIso(p.created), updated_at: msToIso(p.updated) })), 'user_id,id');
   await upsertChunks('logs', ls.map((l) => ({ user_id: uid, day: l.day, habit_id: l.id, count: l.count, skip: l.skip, updated_at: msToIso(l.ts) })), 'user_id,day,habit_id');
@@ -1329,6 +1353,7 @@ sheet.addEventListener('click', (e) => {
   if (e.target === sheet) { closeSheet(); return; }          // Tippen neben das Blatt schließt es
   const b = e.target.closest('[data-sheet]');
   if (!b || !sheetCtx) return;
+  if (sheetCtx.presetId) { const pid = sheetCtx.presetId; closeSheet(); if (b.dataset.sheet === 'confirm-preset-del') removePreset(pid); return; }
   const h = state.habits.find((x) => x.id === sheetCtx.id);
   const { k } = sheetCtx;
   closeSheet();
@@ -1413,10 +1438,10 @@ function submitHabit() {
   const wasEdit = !!editingId;
   if (wasEdit) {
     const h = state.habits.find((x) => x.id === editingId);
-    Object.assign(h, { name, emoji: draft.emoji, target, days, time, before });
+    Object.assign(h, { name, desc: draft.desc.trim().slice(0, 500), emoji: draft.emoji, target, days, time, before });
     touchHabit(h);
   } else {
-    const h = { id: 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, emoji: draft.emoji, target, days, time, before, created: todayKey(), archived: null };
+    const h = { id: 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, desc: draft.desc.trim().slice(0, 500), emoji: draft.emoji, target, days, time, before, created: todayKey(), archived: null };
     state.habits.push(h);
     touchHabit(h);
   }
@@ -1498,11 +1523,20 @@ $('#view').addEventListener('click', (e) => {
     case 'week-pick': openWeekPicker(); break;
     case 'todo-new': location.hash = '#todo-neu'; break;
     case 'todo-edit': location.hash = '#todo-bearbeiten/' + el.dataset.id; break;
+    case 'subs-toggle': {
+      const id = el.dataset.id, open = !openSubs.has(id);
+      if (open) openSubs.add(id); else openSubs.delete(id);
+      el.setAttribute('aria-expanded', String(open));
+      const wrap = el.closest('.todo').querySelector('.subs-wrap');
+      if (wrap) wrap.classList.toggle('open', open);          // nur umschalten statt neu zeichnen, damit es gleitet
+      break;
+    }
     case 'sub-toggle': toggleSub(el.dataset.id, el.dataset.sub); break;
     case 'sub-add': addSubRow(); break;
     case 'sub-del': delSubRow(el.dataset.sid); break;
     case 'preset-load': applyPreset(el.dataset.id); break;
-    case 'preset-del': removePreset(el.dataset.id); break;
+    case 'preset-del': askRemovePreset(el.dataset.id); break;
+    case 'peek-open': { const [kd, pid] = el.dataset.ref.split(':'); openPeek(kd, pid, el.closest('li') || el); break; }
     case 'todo-form-del': { const id = editingTodoId; todoForm = null; removeTodo(id, false); location.hash = '#todo'; break; }
     case 'todo-move': moveTodo(el.dataset.id); break;
     case 'todo-del': removeTodo(el.dataset.id); break;
@@ -1579,6 +1613,88 @@ window.addEventListener('pointerup', (e) => endSwipe(e, false));
 window.addEventListener('pointercancel', (e) => endSwipe(e, true));
 $('#view').addEventListener('click', (e) => { if (swSuppress) { e.preventDefault(); e.stopPropagation(); } }, true);
 
+/* ---------- Lange drücken: Details groß in der Bildschirmmitte ----------
+   Zeilen mit data-peek="habit:<id>" / "todo:<id>". Nach LP_MS Millisekunden ohne Bewegung öffnet sich eine Karte, die aus der Zeile
+   in die Mitte wächst. Der Klick beim Loslassen wird unterdrückt (kein Abhaken, kein Bearbeiten). Tastatur: Knopf "Details anzeigen". */
+const LP_MS = 450, LP_MOVE = 8;
+const peek = $('#peek');
+let lp = null, lpBlock = 0, peekGuard = 0, peekCtx = null;
+function peekContent(kind, id) {
+  const chips = (a) => `<ul class="peek-meta">${a.filter(Boolean).map((x) => `<li>${x}</li>`).join('')}</ul>`;
+  let emoji, title, meta, extra = '', desc;
+  if (kind === 'habit') {
+    const h = state.habits.find((x) => x.id === id);
+    if (!h) return null;
+    emoji = h.emoji; title = h.name; desc = h.desc;
+    meta = chips([h.target > 1 ? `Ziel ${h.target} pro Tag` : 'Einmal pro Tag', esc(daysLabel(h.days)), h.time ? `${icon('clock')} ${esc(h.time)} Uhr${h.before !== null ? ` · Erinnerung ${esc(beforeText(h.before))}` : ''}` : '']);
+  } else {
+    const t = findTodo(id);
+    if (!t || t.deleted) return null;
+    emoji = t.emoji; title = t.text; desc = t.desc;
+    meta = chips([t.done ? 'Erledigt' : t.list === 'today' ? 'Heute' : 'Später']);
+    if ((t.subs || []).length) extra = `<ul class="peek-subs" aria-label="Unterpunkte">${t.subs.map((x) => `<li class="${x.done ? 'done' : ''}"><span class="check small" aria-hidden="true">${x.done ? icon('check') : ''}</span><span>${esc(x.text)}</span></li>`).join('')}</ul>`;
+  }
+  return `<div class="peek-card">
+    <button type="button" class="icon-btn peek-x" data-peek-act="close" aria-label="Schließen">${icon('x')}</button>
+    <div class="peek-body">
+    ${emoji ? `<div class="peek-emoji" aria-hidden="true">${esc(emoji)}</div>` : ''}
+    <h2 id="peek-title">${esc(title)}</h2>${meta}${extra}
+    ${desc ? `<p class="peek-desc">${esc(desc)}</p>` : '<p class="peek-empty">Keine Beschreibung. Du kannst sie beim Bearbeiten hinzufügen.</p>'}</div>
+    <div class="peek-actions"><button type="button" class="btn primary" data-peek-act="edit">Bearbeiten</button><button type="button" class="btn ghost" data-peek-act="close">Schließen</button></div></div>`;
+}
+function openPeek(kind, id, src) {
+  const html = peekContent(kind, id);
+  if (!html) return;
+  peekCtx = { kind, id };
+  peek.innerHTML = html;
+  const r = src.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight;
+  peek.style.setProperty('--dx', `${Math.round(r.left + r.width / 2 - vw / 2)}px`);
+  peek.style.setProperty('--dy', `${Math.round(r.top + r.height / 2 - vh / 2)}px`);
+  peek.style.setProperty('--ps', String(Math.min(.95, Math.max(.5, r.width / Math.min(vw * .92, 420))).toFixed(2)));
+  peek.classList.remove('closing');
+  if (!peek.open) peek.showModal();
+  peekGuard = Infinity;                                      // bis der Finger losgelassen wird (und kurz danach) schließt kein Klick die Karte
+  const h2 = peek.querySelector('h2'); h2.tabIndex = -1; h2.focus();
+}
+function closePeek(now) {
+  if (!peek.open) return;
+  if (now || noMotion()) { peek.close(); return; }
+  peek.classList.add('closing');
+  setTimeout(() => { if (peek.classList.contains('closing')) { peek.close(); peek.classList.remove('closing'); } }, 150);
+}
+peek.addEventListener('click', (e) => {
+  if (Date.now() < peekGuard) return;
+  const b = e.target.closest('[data-peek-act]');
+  if (e.target === peek || (b && b.dataset.peekAct === 'close')) { closePeek(); return; }
+  if (b && b.dataset.peekAct === 'edit' && peekCtx) {
+    const { kind, id } = peekCtx;
+    closePeek(true);
+    location.hash = kind === 'habit' ? `#bearbeiten/${id}` : `#todo-bearbeiten/${id}`;
+  }
+});
+peek.addEventListener('cancel', (e) => { e.preventDefault(); closePeek(); });   // Esc
+function clearLp() { if (lp) { clearTimeout(lp.t); lp = null; } }
+$('#view').addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  const src = e.target.closest('[data-peek]');
+  if (!src || e.target.closest('input, select, textarea, .swipe-alt')) return;
+  clearLp();
+  lp = { src, x: e.clientX, y: e.clientY, pid: e.pointerId, t: setTimeout(() => {
+    const l = lp; lp = null;
+    if (!l || !document.contains(l.src)) return;
+    const [kind, id] = l.src.dataset.peek.split(':');
+    sw = null; clearPress();                                  // laufende Wischgeste / Drück-Animation beenden
+    lpBlock = Infinity;
+    openPeek(kind, id, l.src);
+  }, LP_MS) };
+});
+window.addEventListener('pointermove', (e) => { if (lp && e.pointerId === lp.pid && Math.hypot(e.clientX - lp.x, e.clientY - lp.y) > LP_MOVE) clearLp(); });
+const lpEnd = () => { clearLp(); if (lpBlock === Infinity) lpBlock = Date.now() + 450; if (peekGuard === Infinity) peekGuard = Date.now() + 450; };
+window.addEventListener('pointerup', lpEnd);
+window.addEventListener('pointercancel', lpEnd);
+$('#view').addEventListener('click', (e) => { if (Date.now() < lpBlock) { e.preventDefault(); e.stopPropagation(); } }, true);
+$('#view').addEventListener('contextmenu', (e) => { if (e.target.closest('[data-peek]')) e.preventDefault(); });
+
 function shiftMonth(n) {
   const d = new Date(calMonth.y, calMonth.m + n, 1);
   return { y: d.getFullYear(), m: d.getMonth() };
@@ -1643,7 +1759,7 @@ $('#import-file').addEventListener('change', async (e) => {
     const d = j.data || j;
     if (!Array.isArray(d.habits) || typeof (d.log || {}) !== 'object') throw new Error('format');
     if (!confirm('Alle aktuellen Daten durch das Backup ersetzen?')) return;
-    state = { ...emptyState(), habits: migrateHabits(d.habits), log: d.log || {}, skip: d.skip || {}, todos: (d.todos || []).map((t) => ({ ...t, subs: t.subs || [] })), presets: d.presets || [], settings: { ...defaultSettings(), ...(d.settings || {}) } };
+    state = { ...emptyState(), habits: migrateHabits(d.habits), log: d.log || {}, skip: d.skip || {}, todos: (d.todos || []).map((t) => ({ ...t, subs: t.subs || [], desc: t.desc || '' })), presets: d.presets || [], settings: { ...defaultSettings(), ...(d.settings || {}) } };
     const now = Date.now();                                 // alles gilt als frisch geändert und wird hochgeladen
     state.habits.forEach((h) => touchHabit(h, now));
     for (const src of [state.log, state.skip]) for (const [day, m] of Object.entries(src)) for (const id of Object.keys(m)) { state.ts[day + '|' + id] = now; state.dirty.logs[day + '|' + id] = 1; }
