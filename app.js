@@ -66,7 +66,8 @@ let habitsSub = 'list';                                     // Habits-Seite: 'li
 let draft = null;                                          // Formularentwurf (überlebt Neuzeichnen)
 let formErr = '';
 let deleteArmed = false;
-const foldOpen = { skip: false, done: false };               // Heute: aufgeklappte Bereiche bleiben beim Neuzeichnen offen
+let todoDraft = '';                                         // Text im Feld "Neue Aufgabe" (bleibt beim Neuzeichnen)
+const foldOpen = { skip: false, done: false, tdone: false };               // Heute: aufgeklappte Bereiche bleiben beim Neuzeichnen offen
 
 // Uhrzeit + Vorlauf statt fester Erinnerungszeit: time = "HH:MM" oder '', before = Minuten vorher (0 = pünktlich) oder null (keine Erinnerung).
 function migrateHabits(list) {
@@ -96,13 +97,13 @@ const remindAt = (h) => {                                    // Uhrzeit der Erin
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 };
 // Sync-Felder: ts = Änderungszeit je Tageseintrag ("2026-11-17|habitId" → ms), dirty = noch nicht hochgeladene Änderungen.
-function emptyState() { return { habits: [], log: {}, skip: {}, ts: {}, dirty: { habits: {}, logs: {} }, notified: {} }; }
+function emptyState() { return { habits: [], log: {}, skip: {}, todos: [], ts: {}, dirty: { habits: {}, logs: {}, todos: {} }, notified: {} }; }
 function load() {
   try {
     const r = JSON.parse(localStorage.getItem(KEY));
     if (r && Array.isArray(r.habits)) {
       const dirty = r.dirty || {};
-      return { habits: migrateHabits(r.habits), log: r.log || {}, skip: r.skip || {}, ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {} }, notified: r.notified || {} };
+      return { habits: migrateHabits(r.habits), log: r.log || {}, skip: r.skip || {}, todos: r.todos || [], ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {}, todos: dirty.todos || {} }, notified: r.notified || {} };
     }
   } catch (e) { /* leer starten */ }
   return emptyState();
@@ -190,6 +191,63 @@ function daysLabel(days) {
   return idx.map((i) => WD_SHORT[i]).join(', ');
 }
 
+/* ---------- To-Do (einfache Liste, zählt nicht zur Habit-Quote) ----------
+   Eine Aufgabe liegt in "Heute" oder "Später" und kann erledigt werden. Löschen markiert nur (deleted),
+   damit es auf allen Geräten ankommt und per "Wiederherstellen" zurückgenommen werden kann. */
+const findTodo = (id) => state.todos.find((t) => t.id === id);
+function touchTodo(t) { t.updated = Date.now(); state.dirty.todos[t.id] = 1; save(); queuePush(); }
+function addTodo(text) {
+  const v = String(text || '').trim().slice(0, 200);
+  if (!v) return;
+  const now = Date.now();
+  const t = { id: 't' + now.toString(36) + Math.random().toString(36).slice(2, 5), text: v, list: 'today', done: false, deleted: false, created: now, updated: now };
+  state.todos.push(t);
+  todoDraft = '';
+  touchTodo(t);
+  render();
+  announce(`Aufgabe hinzugefügt: ${v}`);
+}
+function toggleTodo(id) {
+  const t = findTodo(id);
+  if (!t) return;
+  t.done = !t.done;
+  touchTodo(t); render();
+  announce(`${t.text}: ${t.done ? 'erledigt' : 'wieder offen'}`);
+}
+function moveTodo(id) {                                      // Heute ⇄ Später
+  const t = findTodo(id);
+  if (!t || t.done) return;
+  t.list = t.list === 'today' ? 'later' : 'today';
+  touchTodo(t); render();
+  toast(`„${t.text}“ nach ${t.list === 'today' ? 'Heute' : 'Später'} verschoben`, undefined, { label: 'Rückgängig', run: () => moveTodo(id) });
+}
+function removeTodo(id) {
+  const t = findTodo(id);
+  if (!t) return;
+  t.deleted = true; touchTodo(t); render();
+  toast(`„${t.text}“ gelöscht`, undefined, { label: 'Wiederherstellen', run: () => { t.deleted = false; touchTodo(t); render(); toast('Wiederhergestellt'); } });
+}
+function editTodo(id) {
+  const t = findTodo(id);
+  if (!t) return;
+  sheetCtx = { todoId: id };
+  openSheet(`<h2 id="sheet-title">Aufgabe bearbeiten</h2>
+    <input id="todo-edit-text" type="text" maxlength="200" value="${esc(t.text)}" aria-label="Aufgabe" enterkeyhint="done" autocomplete="off">
+    <button type="button" class="btn primary block" data-sheet="todo-save">Speichern</button>
+    <button type="button" class="btn danger block" data-sheet="todo-delete">Löschen</button>
+    <button type="button" class="btn ghost block" data-sheet="close">Abbrechen</button>`);
+  const i = $('#todo-edit-text'); i.focus(); i.setSelectionRange(i.value.length, i.value.length);
+}
+function handleTodoSheet(action) {
+  const id = sheetCtx && sheetCtx.todoId;
+  const t = findTodo(id);
+  const v = $('#todo-edit-text') ? $('#todo-edit-text').value.trim().slice(0, 200) : '';
+  closeSheet();
+  if (!t) return;
+  if (action === 'todo-save' && v) { t.text = v; touchTodo(t); render(); }
+  if (action === 'todo-delete') removeTodo(id);
+}
+
 /* ---------- Rendering ---------- */
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const WD_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
@@ -199,7 +257,7 @@ const TABS = [
   { id: 'today', href: '#heute', label: 'Heute', ic: 'today' },
   { id: 'calendar', href: '#kalender', label: 'Kalender', ic: 'calendar' },
   { id: 'new', href: '#neu', label: 'Neu', ic: 'plus', cls: 'tab-new' },
-  { id: 'habits', href: '#gewohnheiten', label: 'Habits', ic: 'list' },
+  { id: 'habits', href: '#gewohnheiten', label: 'Übersicht', ic: 'list' },
   { id: 'settings', href: '#einstellungen', label: 'Einstellungen', ic: 'gear' },
 ];
 $('#tabbar').innerHTML = `<div class="tabbar-in">${TABS.map((t) =>
@@ -429,7 +487,7 @@ function formHTML() {
   if (!draft) draft = newDraft(h);
   const d = draft;
   return `<div class="view-in form-wrap">
-    ${h ? `<a class="back" href="#gewohnheiten">${icon('left')} Habits</a>` : ''}
+    ${h ? `<a class="back" href="#gewohnheiten">${icon('left')} Übersicht</a>` : ''}
     <header class="page-head left"><div class="titles"><h1>${h ? 'Bearbeiten' : 'Neue Gewohnheit'}</h1>
       <p>${h ? 'Ändere Ziel, Tage oder Erinnerung.' : 'Was möchtest du dir angewöhnen?'}</p></div></header>
     <form id="habit-form" class="form-page" novalidate>
@@ -472,12 +530,18 @@ function beforeOptions(d) {
 const pushActive = () => 'Notification' in window && Notification.permission === 'granted' && push.state === 'on';
 function habitsHTML() {
   const hs = state.habits.filter((h) => !h.archived);
-  const seg = `<nav class="seg" aria-label="Ansicht wählen">
-    <a href="#gewohnheiten" ${habitsSub === 'list' ? 'aria-current="page"' : ''}>Habits</a>
-    <a href="#erinnerungen" ${habitsSub === 'reminders' ? 'aria-current="page"' : ''}>Erinnerungen</a></nav>`;
-  const head = `<header class="page-head left"><div class="titles"><h1>${habitsSub === 'list' ? 'Gewohnheiten' : 'Erinnerungen'}</h1>
-    <p>${habitsSub === 'list' ? `${hs.length} aktive ${hs.length === 1 ? 'Gewohnheit' : 'Gewohnheiten'}` : 'Wann du erinnert wirst'}</p></div></header>`;
+  const openTodos = state.todos.filter((t) => !t.deleted && !t.done).length;
+  const isTodo = habitsSub === 'todo';
+  const seg = `<nav class="seg" aria-label="Bereich wählen">
+    <a href="#gewohnheiten" ${!isTodo ? 'aria-current="page"' : ''}>Gewohnheiten</a>
+    <a href="#todo" ${isTodo ? 'aria-current="page"' : ''}>To-Do</a></nav>`;
+  const sub = isTodo ? `${openTodos} offene ${openTodos === 1 ? 'Aufgabe' : 'Aufgaben'}` : `${hs.length} aktive ${hs.length === 1 ? 'Gewohnheit' : 'Gewohnheiten'}`;
+  const head = `<header class="page-head left"><div class="titles"><h1>Übersicht</h1><p>${sub}</p></div></header>`;
+  if (isTodo) return `<div class="view-in">${head}${seg}${todoHTML()}</div>`;
 
+  const filters = `<nav class="filters" aria-label="Filter">
+    <a class="chip-filter" href="#gewohnheiten" ${habitsSub === 'list' ? 'aria-current="page"' : ''}>Alle</a>
+    <a class="chip-filter" href="#erinnerungen" ${habitsSub === 'reminders' ? 'aria-current="page"' : ''}>Erinnerungen</a></nav>`;
   let body;
   if (habitsSub === 'list') {
     body = hs.length
@@ -498,7 +562,35 @@ function habitsHTML() {
       : `<div class="empty"><h2>Noch keine Erinnerungen</h2><p>Lege beim Anlegen oder Bearbeiten einer Gewohnheit eine Uhrzeit fest und wähle, wie lange vorher du erinnert werden willst.</p></div>`;
     if (!pushActive()) body += `<div class="notice"><p>Erinnerungen kommen erst, wenn Benachrichtigungen aktiv sind.</p><a href="#einstellungen">Zu den Einstellungen</a></div>`;
   }
-  return `<div class="view-in">${head}${seg}${body}</div>`;
+  return `<div class="view-in">${head}${seg}${filters}${body}</div>`;
+}
+
+/* ---------- To-Do-Ansicht: Heute, Später, Erledigt (eingeklappt) ---------- */
+function todoHTML() {
+  const all = state.todos.filter((t) => !t.deleted).sort((a, b) => b.created - a.created);   // neueste oben, direkt unter dem Eingabefeld
+  const today = all.filter((t) => !t.done && t.list === 'today');
+  const later = all.filter((t) => !t.done && t.list === 'later');
+  const done = all.filter((t) => t.done).sort((a, b) => b.updated - a.updated);
+  const section = (id, title, items, empty) => `<section class="group" aria-labelledby="${id}"><h2 id="${id}">${title} <span class="count-badge">${items.length}</span></h2>
+    ${items.length ? `<ul class="list">${items.map(todoRow).join('')}</ul>` : `<p class="todo-empty">${empty}</p>`}</section>`;
+  return `<form id="todo-form" class="todo-add" novalidate>
+      <input id="todo-new" type="text" maxlength="200" autocomplete="off" enterkeyhint="done" placeholder="Neue Aufgabe …" aria-label="Neue Aufgabe" value="${esc(todoDraft)}" data-fid="todo-new">
+      <button type="submit" class="icon-btn add" aria-label="Aufgabe hinzufügen" data-fid="todo-new">${icon('plus')}</button></form>
+    ${section('t-today', 'Heute', today, 'Nichts für heute.')}
+    ${section('t-later', 'Später', later, 'Leer. Nach rechts wischen schiebt eine Aufgabe hierher.')}
+    ${all.length ? '<p class="hint swipe-hint">Nach rechts wischen verschiebt zwischen Heute und Später, nach links löscht.</p>' : ''}
+    ${foldHTML('tdone', 'Erledigt', done, todoRow)}`;
+}
+function todoRow(t) {
+  const inner = `<div class="todo ${t.done ? 'done' : ''}">
+    <button type="button" class="todo-check" data-action="todo-toggle" data-id="${t.id}" data-fid="tc-${t.id}" aria-pressed="${t.done}" aria-label="${esc(t.text)}: ${t.done ? 'wieder öffnen' : 'als erledigt markieren'}"><span class="check" aria-hidden="true">${icon('check')}</span></button>
+    <button type="button" class="todo-text" data-action="todo-edit" data-id="${t.id}" data-fid="te-${t.id}">${esc(t.text)}</button></div>`;
+  const target = t.list === 'today' ? 'Später' : 'Heute';
+  return `<li class="swipe" data-kind="todo" data-id="${t.id}" data-right="${t.done ? 0 : 1}">
+    ${t.done ? '' : `<div class="swipe-bg skip" aria-hidden="true">${icon(t.list === 'today' ? 'clock' : 'calendar')}</div>`}
+    <div class="swipe-bg del" aria-hidden="true">${icon('trash')}</div>
+    <div class="swipe-front">${inner}</div>
+    <div class="swipe-alt">${t.done ? '' : `<button type="button" class="sr-btn" data-action="todo-move" data-id="${t.id}">${esc(t.text)} nach ${target} verschieben</button>`}<button type="button" class="sr-btn" data-action="todo-del" data-id="${t.id}">${esc(t.text)} löschen</button></div></li>`;
 }
 
 /* ---------- Einstellungen ---------- */
@@ -535,7 +627,7 @@ function settingsHTML() {
 function accountHTML() {
   if (!sb) return '<div class="panel"><p>Die Cloud-Anbindung konnte nicht geladen werden. Starte die App mit Internetverbindung neu.</p></div>';
   if (cloud.user) {
-    const pending = Object.keys(state.dirty.habits).length + Object.keys(state.dirty.logs).length;
+    const pending = Object.keys(state.dirty.habits).length + Object.keys(state.dirty.logs).length + Object.keys(state.dirty.todos).length;
     const time = cloud.lastSync ? fmt({ hour: '2-digit', minute: '2-digit' }).format(new Date(cloud.lastSync)) : '';
     let msg;
     if (cloud.sync === 'syncing') msg = 'Synchronisiere …';
@@ -565,6 +657,7 @@ function loginError(err) {
 }
 $('#view').addEventListener('submit', async (e) => {
   if (e.target.id === 'habit-form') { e.preventDefault(); submitHabit(); return; }
+  if (e.target.id === 'todo-form') { e.preventDefault(); addTodo(todoDraft); return; }
   if (e.target.id !== 'login-form') return;
   e.preventDefault();
   const email = $('#l-email').value.trim();
@@ -622,7 +715,10 @@ function setLocalSkip(day, id, reason) {
   if (reason) d[id] = reason; else delete d[id];
   if (!Object.keys(d).length) delete state.skip[day];
 }
-function mergeFromCloud(habitRows, logRows) {
+function todoFromCloud(r) {
+  return { id: r.id, text: r.text, list: r.list, done: !!r.done, deleted: !!r.deleted, created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
+}
+function mergeFromCloud(habitRows, logRows, todoRows = []) {
   let changed = false;
   const cHabits = new Map(habitRows.map((r) => [r.id, r]));
   for (const r of habitRows) {
@@ -648,6 +744,17 @@ function mergeFromCloud(habitRows, logRows) {
     const r = cLogs.get(k);
     if (!r || lts(state.ts[k]) > Date.parse(r.updated_at)) state.dirty.logs[k] = 1;
   }
+  const cTodos = new Map(todoRows.map((r) => [r.id, r]));
+  for (const r of todoRows) {                               // To-Dos: pro Aufgabe gewinnt die jüngere Änderung
+    const local = findTodo(r.id);
+    const cts = Date.parse(r.updated_at);
+    if (!local) { state.todos.push(todoFromCloud(r)); changed = true; }
+    else if (cts > lts(local.updated)) { Object.assign(local, todoFromCloud(r)); delete state.dirty.todos[local.id]; changed = true; }
+  }
+  for (const t of state.todos) {
+    const r = cTodos.get(t.id);
+    if (!r || lts(t.updated) > Date.parse(r.updated_at)) state.dirty.todos[t.id] = 1;
+  }
   return changed;
 }
 async function upsertChunks(table, rows, onConflict) {
@@ -661,11 +768,15 @@ async function pushDirty() {
   const hs = state.habits.filter((h) => state.dirty.habits[h.id]);
   const ls = Object.keys(state.dirty.logs).map((k) => { const [day, id] = splitKey(k); return { k, day, id, ts: state.ts[k] || 0, count: count(day, id), skip: skipOf(day, id) }; });
   await upsertChunks('habits', hs.map((h) => ({ user_id: uid, id: h.id, name: h.name, target: h.target, days: h.days, at_time: h.time || null, remind_before: h.time && h.before != null ? h.before : null, remind: null, created: h.created, archived: h.archived || null, updated_at: msToIso(h.updated) })), 'user_id,id');
+  const ts = state.todos.filter((t) => state.dirty.todos[t.id]);
+  await upsertChunks('todos', ts.map((t) => ({ user_id: uid, id: t.id, text: t.text, list: t.list, done: t.done, deleted: t.deleted, created_at: msToIso(t.created), updated_at: msToIso(t.updated) })), 'user_id,id');
   await upsertChunks('logs', ls.map((l) => ({ user_id: uid, day: l.day, habit_id: l.id, count: l.count, skip: l.skip, updated_at: msToIso(l.ts) })), 'user_id,day,habit_id');
   const sent = {};                                          // nur löschen, was sich während des Hochladens nicht erneut geändert hat
   hs.forEach((h) => { sent['h' + h.id] = h.updated; });
   ls.forEach((l) => { sent['l' + l.k] = l.ts; });
   for (const h of hs) if ((h.updated) === sent['h' + h.id] && state.dirty.habits[h.id]) delete state.dirty.habits[h.id];
+  ts.forEach((t) => { sent['t' + t.id] = t.updated; });
+  for (const t of ts) if (t.updated === sent['t' + t.id] && state.dirty.todos[t.id]) delete state.dirty.todos[t.id];
   for (const l of ls) if ((state.ts[l.k] || 0) === l.ts) delete state.dirty.logs[l.k];
 }
 let syncing = false, pending = null, pushTimer;
@@ -677,8 +788,8 @@ async function runSync(full) {
   let changed = false;
   try {
     if (full) {
-      const [hr, lr] = await Promise.all([fetchAll('habits', ['id']), fetchAll('logs', ['day', 'habit_id'])]);
-      changed = mergeFromCloud(hr, lr);
+      const [hr, lr, tr] = await Promise.all([fetchAll('habits', ['id']), fetchAll('logs', ['day', 'habit_id']), fetchAll('todos', ['id'])]);
+      changed = mergeFromCloud(hr, lr, tr);
     }
     await pushDirty();
     cloud.sync = 'ok'; cloud.lastSync = Date.now();
@@ -697,7 +808,7 @@ function queuePush() {                                      // Debounce: mehrere
   clearTimeout(pushTimer);
   pushTimer = setTimeout(() => runSync(false), 1500);
 }
-const hasDirty = () => Object.keys(state.dirty.habits).length + Object.keys(state.dirty.logs).length > 0;
+const hasDirty = () => Object.keys(state.dirty.habits).length + Object.keys(state.dirty.logs).length + Object.keys(state.dirty.todos).length > 0;
 if (sb) {
   // Feuert beim Start (INITIAL_SESSION), nach Login/Logout und beim Token-Refresh.
   sb.auth.onAuthStateChange((event, session) => {
@@ -748,6 +859,7 @@ sheet.addEventListener('click', (e) => {
   if (e.target === sheet) { closeSheet(); return; }          // Tippen neben das Blatt schließt es
   const b = e.target.closest('[data-sheet]');
   if (!b || !sheetCtx) return;
+  if (b.dataset.sheet.startsWith('todo-')) { handleTodoSheet(b.dataset.sheet); return; }
   const h = state.habits.find((x) => x.id === sheetCtx.id);
   const { k } = sheetCtx;
   closeSheet();
@@ -759,6 +871,7 @@ sheet.addEventListener('click', (e) => {
     toast(`„${h.name}“ übersprungen (${r ? r.label : b.dataset.reason})`, undefined, { label: 'Rückgängig', run: () => setSkip(k, h, null) });
   }
 });
+sheet.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'todo-edit-text') { e.preventDefault(); handleTodoSheet('todo-save'); } });
 const ageDays = (h) => Math.round((parse(todayKey()) - parse(h.created)) / 864e5);
 function requestDelete(id) {
   const h = state.habits.find((x) => x.id === id);
@@ -861,7 +974,10 @@ function onFormInput(e) {
   if (id === 'f-before' && !custom.hidden) custom.scrollIntoView({ block: 'nearest' });   // Feld nicht unter der festen Speichern-Leiste lassen
   syncDraft();
 }
-$('#view').addEventListener('input', (e) => { if (e.target.closest && e.target.closest('#habit-form')) onFormInput(e); });
+$('#view').addEventListener('input', (e) => {
+  if (e.target.id === 'todo-new') todoDraft = e.target.value;
+  if (e.target.closest && e.target.closest('#habit-form')) onFormInput(e);
+});
 
 /* ---------- Klicks ---------- */
 $('#view').addEventListener('click', (e) => {
@@ -882,6 +998,10 @@ $('#view').addEventListener('click', (e) => {
     case 'inc': setCount(k, h, count(k, h.id) + 1); break;
     case 'dec': setCount(k, h, count(k, h.id) - 1); break;
     case 'unskip': setSkip(k, h, null); break;
+    case 'todo-toggle': toggleTodo(el.dataset.id); break;
+    case 'todo-edit': editTodo(el.dataset.id); break;
+    case 'todo-move': moveTodo(el.dataset.id); break;
+    case 'todo-del': removeTodo(el.dataset.id); break;
     case 'skip-ask': askSkip(el.dataset.id); break;
     case 'del-ask': requestDelete(el.dataset.id); break;
     case 'day-prev': viewDate = addDays(viewDate, -1); render(); break;
@@ -939,7 +1059,12 @@ function endSwipe(e, cancelled) {
   const id = s.li.dataset.id;
   const reset = () => { s.front.style.transform = ''; s.li.classList.remove('armed'); s.li.dataset.dir = ''; };
   if (cancelled || Math.abs(s.dx) < SW_THRESH) { reset(); return; }
-  if (s.dx > 0) { reset(); askSkip(id); return; }
+  const todo = s.li.dataset.kind === 'todo';
+  if (s.dx > 0) {
+    if (todo) { s.front.style.transform = 'translateX(110%)'; setTimeout(() => moveTodo(id), 170); return; }   // Heute ⇄ Später
+    reset(); askSkip(id); return;
+  }
+  if (todo) { s.front.style.transform = 'translateX(-110%)'; setTimeout(() => removeTodo(id), 170); return; }
   const h = state.habits.find((x) => x.id === id);
   if (h && ageDays(h) > 1) { reset(); requestDelete(id); return; }   // Bestätigung nötig → Zeile bleibt, Dialog erscheint
   s.front.style.transform = 'translateX(-110%)';                     // sonst herausgleiten lassen und löschen
@@ -973,6 +1098,7 @@ function route(fromNav) {
     }
     case 'gewohnheiten': view = 'habits'; habitsSub = 'list'; break;
     case 'erinnerungen': view = 'habits'; habitsSub = 'reminders'; break;
+    case 'todo': view = 'habits'; habitsSub = 'todo'; break;
     case 'einstellungen': view = 'settings'; break;
     default: view = 'today';
   }
@@ -1001,10 +1127,11 @@ $('#import-file').addEventListener('change', async (e) => {
     const d = j.data || j;
     if (!Array.isArray(d.habits) || typeof (d.log || {}) !== 'object') throw new Error('format');
     if (!confirm('Alle aktuellen Daten durch das Backup ersetzen?')) return;
-    state = { ...emptyState(), habits: migrateHabits(d.habits), log: d.log || {}, skip: d.skip || {} };
+    state = { ...emptyState(), habits: migrateHabits(d.habits), log: d.log || {}, skip: d.skip || {}, todos: d.todos || [] };
     const now = Date.now();                                 // alles gilt als frisch geändert und wird hochgeladen
     state.habits.forEach((h) => touchHabit(h, now));
     for (const src of [state.log, state.skip]) for (const [day, m] of Object.entries(src)) for (const id of Object.keys(m)) { state.ts[day + '|' + id] = now; state.dirty.logs[day + '|' + id] = 1; }
+    state.todos.forEach((t) => { t.updated = now; state.dirty.todos[t.id] = 1; });
     save(); queuePush(); render(); toast('Backup eingespielt');
   } catch (err) { toast('Datei konnte nicht gelesen werden.', 'error'); }
 });

@@ -110,14 +110,13 @@ button { cursor: pointer; }
   transition: color var(--t-fast), background-color var(--t-fast);
 }
 .tabbar .lbl { max-width: 100%; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tabbar .ico { width: 44px; height: 26px; border-radius: 13px; display: grid; place-items: center; transition: background-color var(--t-fast); }
+.tabbar .ico { width: 44px; height: 26px; display: grid; place-items: center; }
 .tabbar .ico .ic { width: 20px; height: 20px; }
-.tabbar a[aria-current="page"] { color: var(--accent); }
-.tabbar a[aria-current="page"] .ico { background: var(--accent-soft); }
-.tabbar a:active .ico { background: var(--surface-2); }
+.tabbar a[aria-current="page"] { color: var(--accent); background: var(--accent-soft); }   /* ganzer Reiter türkis hinterlegt */
+.tabbar a:active { background: var(--surface-2); }
 .tabbar .tab-new { color: var(--accent); gap: 5px; }
 .tabbar .tab-new .plus { width: 44px; height: 32px; border-radius: 12px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; }
-.tabbar .tab-new[aria-current="page"] .plus { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+
 
 /* ---------- Buttons ---------- */
 .btn {
@@ -320,6 +319,21 @@ html:has(.form-page) { scroll-padding-bottom: calc(var(--tabbar-h) + 104px + env
 .rem-time { min-width: 64px; font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .notice { margin-top: var(--s4); padding: var(--s3) var(--s4); border: 1.5px solid var(--border); border-radius: var(--r-md); color: var(--muted); font-size: .9375rem; display: grid; gap: var(--s2); }
 .notice a { color: var(--accent); font-weight: 600; min-height: 44px; display: inline-flex; align-items: center; }
+
+/* ---------- Übersicht: Filter und To-Do ---------- */
+.filters { display: flex; gap: var(--s2); margin-bottom: var(--s4); }
+.chip-filter { min-height: 44px; padding: 0 var(--s4); display: inline-flex; align-items: center; border-radius: 999px; border: 1.5px solid var(--border); background: var(--surface); color: var(--muted); font-weight: 600; text-decoration: none; transition: background-color var(--t-fast), color var(--t-fast), border-color var(--t-fast); }
+.chip-filter[aria-current="page"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.chip-filter:active { background: var(--surface-2); }
+.todo-add { display: flex; gap: var(--s2); align-items: center; margin-bottom: var(--s2); }
+.todo-add input { flex: 1; min-width: 0; }
+.todo-add .icon-btn.add { background: var(--accent); color: var(--on-accent); border-radius: var(--r-sm); }
+.todo { display: flex; align-items: center; background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-md); min-height: 56px; transition: background-color var(--t-med), border-color var(--t-med); }
+.todo.done { background: var(--accent-soft); border-color: var(--accent); }
+.todo-check { width: 52px; height: 52px; flex: none; display: grid; place-items: center; border: 0; background: transparent; }
+.todo-text { flex: 1; min-width: 0; min-height: 52px; padding: var(--s2) var(--s4) var(--s2) 0; border: 0; background: transparent; text-align: left; font-weight: 600; overflow-wrap: anywhere; }
+.todo.done .todo-text { text-decoration: line-through; text-decoration-thickness: 1.5px; color: var(--muted); }
+.todo-empty { color: var(--muted); font-size: .9375rem; padding: var(--s2) 0; }
 
 /* ---------- Tagesbericht ---------- */
 .back { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; margin: -8px 0 var(--s2) -8px; padding: 0 8px; color: var(--muted); text-decoration: none; font-weight: 600; border-radius: var(--r-sm); }
