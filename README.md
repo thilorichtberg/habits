@@ -101,4 +101,4 @@ Die App wurde im Browser (Playwright, Handy-Viewports 375 und 390 px, hell und d
 
 ## Lizenz
 
-[MIT](LICENSE). Für den Code von Drittanbietern gelten deren eigene Lizenzen.
+[GNU AGPL-3.0](LICENSE), Copyright (C) 2026 thilorichtberg. Wer die App ändert und weitergibt oder als Webdienst betreibt, muss den geänderten Quellcode unter derselben Lizenz offenlegen. Für den Code von Drittanbietern gelten deren eigene Lizenzen.
