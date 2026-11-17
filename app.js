@@ -37,6 +37,7 @@ const ICONS = {
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   chart: '<path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/>',
@@ -75,6 +76,7 @@ let deleteArmed = false;
 let todoQuery = '';                                         // Suchtext in der To-Do-Liste
 let editingTodoId = null;                                   // To-Do-Seite: null = neue Aufgabe
 let todoForm = null;                                        // Entwurf der Aufgabe (überlebt Neuzeichnen)
+let updating = false;                                       // Update-Prüfung läuft (Einstellungen)
 const foldOpen = { skip: false, done: false, tdone: false };               // Heute: aufgeklappte Bereiche bleiben beim Neuzeichnen offen
 
 // Uhrzeit + Vorlauf statt fester Erinnerungszeit: time = "HH:MM" oder '', before = Minuten vorher (0 = pünktlich) oder null (keine Erinnerung).
@@ -792,6 +794,11 @@ function settingsHTML() {
     <header class="page-head left"><div class="titles"><h1>Einstellungen</h1></div></header>
     <section class="section" aria-labelledby="h-cloud"><h2 id="h-cloud">Konto &amp; Cloud</h2>${accountHTML()}</section>
     <section class="section" aria-labelledby="h-notif"><h2 id="h-notif">Benachrichtigungen</h2>${notifPanelHTML()}</section>
+    <section class="section" aria-labelledby="h-app"><h2 id="h-app">App</h2>
+      <div class="panel"><p class="status">Version ${esc(appVersion())}</p>
+      <p>Neue Versionen kommen von selbst an. Falls du eine Änderung nicht siehst, tippe hier.</p>
+      <div class="btn-row"><button class="btn" data-action="check-update" ${updating ? 'disabled' : ''}>${icon('refresh')} ${updating ? 'Prüfe …' : 'Auf Updates prüfen'}</button></div></div></section>
+
     <section class="section" aria-labelledby="h-backup"><h2 id="h-backup">Backup</h2>
       <div class="panel"><p>Deine Daten liegen auf diesem Gerät${cloud.user ? ' und in der Cloud' : ''}. Ein Export gibt dir zusätzlich eine eigene Sicherungsdatei.</p>
       <div class="btn-row"><button class="btn" data-action="export">${icon('download')} Exportieren</button>
@@ -1218,6 +1225,7 @@ $('#view').addEventListener('click', (e) => {
     case 'clear-time': $('#f-time').value = ''; onFormInput({ target: $('#f-time') }); break;
     case 'delete-habit': deleteHabit(); break;
     case 'notif': setupPush(true); break;
+    case 'check-update': checkForUpdate(); break;
     case 'sync': runSync(true).then(() => { if (cloud.sync === 'error') toast('Synchronisierung fehlgeschlagen', 'error'); }); break;
     case 'logout': sb.auth.signOut().then(() => toast('Abgemeldet')); break;
     case 'export': exportData(); break;
@@ -1472,4 +1480,33 @@ document.addEventListener('click', (e) => {                    // Tastatur (Ente
 route();
 tick();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+/* ---------- Updates: Version anzeigen, selbst prüfen, neuer Service Worker lädt die Seite neu ---------- */
+function appVersion() { return (document.querySelector('meta[name="app-version"]') || {}).content || 'unbekannt'; }
+async function checkForUpdate() {
+  updating = true; render();
+  try {
+    const html = await (await fetch('./?check=' + Date.now(), { cache: 'no-store' })).text();     // frische Startseite, am Zwischenspeicher vorbei
+    const live = (html.match(/<meta name="app-version" content="([^"]*)"/) || [])[1];
+    if (!live) throw new Error('keine Version gefunden');
+    if (live === appVersion()) { updating = false; render(); toast('Du hast die neueste Version'); return; }
+    toast('Neue Version wird geladen …');
+    if ('serviceWorker' in navigator) for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+    if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+    location.replace(location.pathname + '?u=' + Date.now() + location.hash);                       // neue Adresse = garantiert frisch
+  } catch (e) {
+    updating = false; render(); toast('Update-Prüfung fehlgeschlagen. Bist du online?', 'error');
+  }
+}
+if ('serviceWorker' in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {                              // ein neuer Service Worker hat übernommen
+    if (!hadController || reloading) return;
+    if (view === 'form' || view === 'todoform') { toast('Neue Version da', undefined, { label: 'Neu laden', run: () => location.reload() }); return; }   // nie ein offenes Formular wegwerfen
+    reloading = true; location.reload();
+  });
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    reg.update();
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update(); });   // beim Zurückkehren in die App nach Updates sehen
+  }).catch(() => {});
+}

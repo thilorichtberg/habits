@@ -1,6 +1,8 @@
 'use strict';
-// Network-first: neue Versionen kommen sofort an, offline greift der Cache.
-const CACHE = 'habits-v3';
+// Network-first mit Nachfrage: GitHub Pages erlaubt 10 Minuten Zwischenspeicher (max-age=600). Mit cache: 'no-cache'
+// fragt der Browser bei jedem Abruf kurz beim Server nach (bei unveränderten Dateien nur eine winzige 304-Antwort),
+// so kommt eine neue Version sofort an. Offline greift der Cache.
+const CACHE = 'habits-v4';
 const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'vendor/supabase.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -13,7 +15,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(req).then((res) => {
+    fetch(req.url, { cache: 'no-cache' }).then((res) => {
       const copy = res.clone();
       caches.open(CACHE).then((c) => c.put(req, copy));
       return res;
