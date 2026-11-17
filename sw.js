@@ -1,6 +1,6 @@
 'use strict';
 // Network-first: neue Versionen kommen sofort an, offline greift der Cache.
-const CACHE = 'habits-v2';
+const CACHE = 'habits-v3';
 const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'vendor/supabase.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -19,6 +19,14 @@ self.addEventListener('fetch', (e) => {
       return res;
     }).catch(() => caches.match(req).then((r) => r || caches.match('index.html')))
   );
+});
+// Push vom Server: iOS verlangt, dass jede Nachricht sichtbar angezeigt wird.
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) { /* ohne Daten */ }
+  e.waitUntil(self.registration.showNotification(d.title || 'Habits', {
+    body: d.body || '', icon: 'icon-192.png', badge: 'icon-192.png', tag: d.tag || undefined,
+  }));
 });
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();

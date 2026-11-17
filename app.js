@@ -15,6 +15,9 @@ const KEY = 'habit-tracker-v1';
 const SUPABASE_URL = 'https://syzrpidpcgkmpjowpcfp.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_iOFLmwKaW6Qx65EBhPUzng_MH9q1IPg';
 const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+// Öffentlicher VAPID-Schlüssel (der Private Key liegt nur als Secret in Supabase).
+const VAPID_PUBLIC_KEY = 'BLC4GZLRsEzN6e5B_erIs_G9QTG-wPhqDabAjPoVJyyvi0fdvqgtmFAv-z_G3yhnHDTlwuYrWa16jtxWTRWrn8U';
+const push = { state: 'idle' };                                // idle | on | error
 const cloud = { user: null, sync: 'idle', lastSync: 0, lastAttempt: 0, busy: false, error: '', email: '' };
 const WEEK = [1, 2, 3, 4, 5, 6, 0];                    // Mo..So als JS-getDay()-Werte
 const WD_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
@@ -250,11 +253,17 @@ function habitsHTML() {
   const notifOK = 'Notification' in window;
   const perm = notifOK ? Notification.permission : 'unsupported';
   const standalone = window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
-  let notifText, notifBtn = '';
-  if (!notifOK) notifText = standalone ? 'Dein Browser unterstützt keine Benachrichtigungen.' : 'Installiere die App zuerst auf dem Home-Bildschirm (Teilen → „Zum Home-Bildschirm“). Erst dann sind Benachrichtigungen möglich.';
-  else if (perm === 'granted') notifText = 'Aktiviert. Erinnerungen erscheinen, solange die App geöffnet oder kürzlich im Hintergrund war.';
+  let notifText, notifBtn = '', notifErr = '';
+  const btn = (label) => `<button class="btn primary" data-action="notif">${icon('bell')} ${label}</button>`;
+  if (!notifOK || !('PushManager' in window)) notifText = standalone ? 'Dein Browser unterstützt keine Push-Nachrichten.' : 'Installiere die App zuerst auf dem Home-Bildschirm (Teilen → „Zum Home-Bildschirm“). Erst dann sind Benachrichtigungen möglich.';
   else if (perm === 'denied') notifText = 'Blockiert. Erlaube Benachrichtigungen in den iPhone-Einstellungen unter „Mitteilungen“.';
-  else { notifText = 'Noch nicht aktiviert.'; notifBtn = `<button class="btn primary" data-action="notif">${icon('bell')} Erinnerungen aktivieren</button>`; }
+  else if (!sb || !cloud.user) notifText = 'Melde dich oben an. Der Server schickt die Erinnerungen und muss wissen, an wen.';
+  else if (perm === 'granted' && push.state === 'on') notifText = 'Aktiv. Erinnerungen kommen auch bei geschlossener App.';
+  else {
+    notifText = perm === 'granted' ? 'Erlaubt, aber noch nicht beim Server eingerichtet.' : 'Noch nicht aktiviert.';
+    if (push.state === 'error') notifErr = '<p class="error" role="alert">Die Einrichtung ist fehlgeschlagen. Prüfe dein Internet und versuche es erneut.</p>';
+    notifBtn = btn(push.state === 'error' ? 'Erneut versuchen' : 'Erinnerungen aktivieren');
+  }
 
   return `<div class="view-in">
     <header class="page-head left"><div class="titles"><h1>Gewohnheiten</h1><p>${hs.length} aktive ${hs.length === 1 ? 'Gewohnheit' : 'Gewohnheiten'}</p></div></header>
@@ -266,7 +275,7 @@ function habitsHTML() {
     <section class="section" aria-labelledby="h-cloud"><h2 id="h-cloud">Konto &amp; Cloud</h2>${accountHTML()}</section>
 
     <section class="section" aria-labelledby="h-notif"><h2 id="h-notif">Erinnerungen</h2>
-      <div class="panel"><p class="status">${esc(notifText)}</p>${notifBtn}</div></section>
+      <div class="panel"><p class="status">${esc(notifText)}</p>${notifErr}${notifBtn}</div></section>
 
     <section class="section" aria-labelledby="h-backup"><h2 id="h-backup">Backup</h2>
       <div class="panel"><p>Deine Daten liegen nur auf diesem Gerät. Wenn du die App löschst, sind sie weg. Exportiere sie deshalb ab und zu.</p>
@@ -439,7 +448,7 @@ if (sb) {
     if (before === now) return;                             // z. B. Token-Refresh: nichts neu zeichnen
     cloud.sync = 'idle'; cloud.error = '';
     if (view === 'habits') render();
-    if (now) setTimeout(() => runSync(true), 0);            // nicht direkt im Callback auf Supabase warten
+    if (now) setTimeout(() => { runSync(true); setupPush(false); }, 0);            // nicht direkt im Callback auf Supabase warten
   });
 }
 
@@ -552,7 +561,7 @@ $('#view').addEventListener('click', (e) => {
     case 'open-day': viewDate = parse(el.dataset.date); location.hash = '#heute'; break;
     case 'new': openDialog(); break;
     case 'edit': openDialog(el.dataset.id); break;
-    case 'notif': requestNotif(); break;
+    case 'notif': setupPush(true); break;
     case 'sync': runSync(true).then(() => { if (cloud.sync === 'error') toast('Synchronisierung fehlgeschlagen', 'error'); }); break;
     case 'logout': sb.auth.signOut().then(() => toast('Abgemeldet')); break;
     case 'export': exportData(); break;
@@ -601,38 +610,40 @@ $('#import-file').addEventListener('change', async (e) => {
   } catch (err) { toast('Datei konnte nicht gelesen werden.', 'error'); }
 });
 
-/* ---------- Erinnerungen ---------- */
-async function requestNotif() {
+/* ---------- Push-Erinnerungen ----------
+   Die Erinnerungen verschickt der Server (Supabase Edge Function + Zeitplan). Die App meldet nur dieses Gerät an:
+   1) Erlaubnis fragen (muss direkt aus einem Tipp heraus passieren, sonst blockt iOS)
+   2) Beim Push-Dienst (Apple) anmelden → ergibt eine Adresse samt Schlüsseln
+   3) Diese Adresse samt Zeitzone in der Tabelle push_subscriptions speichern */
+const urlB64ToUint8 = (b64) => {
+  const s = (b64 + '='.repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+};
+async function setupPush(interactive) {
+  if (!sb || !cloud.user || !('PushManager' in window) || !('Notification' in window)) return;
   try {
-    const r = await Notification.requestPermission();
-    toast(r === 'granted' ? 'Erinnerungen aktiviert' : 'Nicht erlaubt', r === 'granted' ? undefined : 'error');
-  } catch (e) { toast('Benachrichtigungen nicht möglich', 'error'); }
-  render();
-}
-async function notify(h) {
-  const opts = { body: h.target > 1 ? `Ziel heute: ${h.target}×` : 'Noch offen für heute.', icon: 'icon-192.png', tag: 'habit-' + h.id };
-  try {
-    const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.ready : null;
-    if (reg) await reg.showNotification(h.name, opts); else new Notification(h.name, opts);
-  } catch (e) { /* ignorieren */ }
-}
-function checkReminders() {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  const now = new Date();
-  const k = key(now);
-  const mins = now.getHours() * 60 + now.getMinutes();
-  state.notified[k] = state.notified[k] || {};
-  let dirty = false;
-  for (const h of scheduled(k)) {
-    if (!h.remind || state.notified[k][h.id]) continue;
-    const [H, M] = h.remind.split(':').map(Number);
-    const diff = mins - (H * 60 + M);
-    if (diff < 0 || diff > 90) continue;                    // nur im Zeitfenster (max. 90 Min. verspätet)
-    state.notified[k][h.id] = true; dirty = true;
-    if (count(k, h.id) < h.target) notify(h);
+    if (interactive && Notification.permission !== 'granted') {
+      const r = await Notification.requestPermission();
+      if (r !== 'granted') { toast('Nicht erlaubt', 'error'); render(); return; }
+    }
+    if (Notification.permission !== 'granted') return;
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription())
+      || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8(VAPID_PUBLIC_KEY) });
+    const j = sub.toJSON();
+    const { error } = await sb.from('push_subscriptions').upsert({
+      user_id: cloud.user.id, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    }, { onConflict: 'user_id,endpoint' });
+    if (error) throw error;
+    push.state = 'on';
+    if (interactive) toast('Erinnerungen aktiviert');
+  } catch (e) {
+    console.warn('Push-Einrichtung fehlgeschlagen', e);
+    push.state = 'error';
+    if (interactive) toast('Einrichtung fehlgeschlagen', 'error');
   }
-  for (const d of Object.keys(state.notified)) if (d !== k) { delete state.notified[d]; dirty = true; }
-  if (dirty) save();
+  if (view === 'habits') render();
 }
 
 /* ---------- Tageswechsel & Hintergrund ---------- */
@@ -644,11 +655,10 @@ function tick() {
     lastDay = t;
     render();
   }
-  checkReminders();
   if (cloud.user && hasDirty() && !syncing && Date.now() - cloud.lastAttempt > 60000) runSync(true);   // Wiederholung nach Fehler
 }
 setInterval(tick, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { tick(); runSync(true); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { tick(); runSync(true); setupPush(false); } });
 window.addEventListener('online', () => runSync(true));
 
 /* ---------- Start ---------- */
