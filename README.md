@@ -36,7 +36,7 @@ Ohne Anmeldung läuft alles lokal im Browser (Daten bleiben auf dem Gerät). Syn
 **Technik und Bedienung**
 - **Local-first:** Die App arbeitet immer lokal und gleicht im Hintergrund mit der Cloud ab. Pro Eintrag gewinnt die jüngere Änderung (last write wins)
 - Backup als JSON (Export/Import), Hell- und Dunkelmodus, Seitenleiste für künftige Apps
-- Drück-Animationen, Rücksicht auf „Bewegung reduzieren", Screenreader-Namen, Tastatur-Alternativen zu den Wischgesten
+- Umschalter mit gleitender Hinterlegung wie die Reiterleiste, Drück-Animationen, Rücksicht auf „Bewegung reduzieren", Screenreader-Namen, Tastatur-Alternativen zu den Wischgesten
 - Updates kommen sofort an (Service Worker fragt immer beim Server nach); Version und „Auf Updates prüfen" stehen in den Einstellungen
 
 ## Architektur

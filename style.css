@@ -729,3 +729,17 @@ input[type="time"]::-webkit-datetime-edit, input[type="date"]::-webkit-datetime-
 @media (prefers-reduced-motion: reduce) { .wk-body.anim-next, .wk-body.anim-prev { animation: none; } .wk-strip, .day-wrap, .day-card .dh .chev { transition: none; } }
 .row > input[type="time"], .row > input[type="date"] { flex: 1 1 0; width: auto; min-width: 0; }   /* nie breiter als Platz übrig ist, auch bei 320 px */
 .field > * { min-width: 0; }   /* Kinder eines Feldes (Gitter) dürfen schmaler als ihr Inhalt werden, sonst schiebt das Datumsfeld die Zeile aus dem Kasten */
+
+/* ---------- Umschalter: gleitende Hinterlegung (gleiches Tempo wie die Reiterleiste) ---------- */
+.seg, .filters { position: relative; }
+.sl-ind { position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none;
+  transition: transform 340ms cubic-bezier(.3, .9, .3, 1), width 340ms cubic-bezier(.3, .9, .3, 1), height 340ms cubic-bezier(.3, .9, .3, 1); }
+.sl-ind.instant { transition: none; }
+.seg > a, .filters > a { position: relative; z-index: 1; }
+.seg .sl-ind { background: var(--surface); border-radius: 10px; box-shadow: var(--shadow); }
+.filters .sl-ind { background: var(--accent-soft); border: 1.5px solid var(--accent); border-radius: 999px; }
+.seg.has-ind a[aria-current="page"], .seg.has-ind a:active { background: transparent; box-shadow: none; }   /* die gleitende Hinterlegung übernimmt */
+.filters.has-ind .chip-filter { background: transparent; }
+.filters.has-ind .chip-filter[aria-current="page"] { border-color: transparent; }
+.seg a, .filters .chip-filter { transition: color 240ms var(--ease); }
+@media (prefers-reduced-motion: reduce) { .sl-ind { transition: none; } .seg a, .filters .chip-filter { transition: none; } }

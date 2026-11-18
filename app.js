@@ -683,7 +683,35 @@ function moveIndicator(instant) {
   ind.style.transform = `translate(${left + ix}px, ${cur.offsetTop + iy}px)`;
   if (instant) { void ind.offsetWidth; ind.classList.remove('instant'); indicatorPlaced = true; }
 }
-window.addEventListener('resize', () => moveIndicator(true));
+window.addEventListener('resize', () => { moveIndicator(true); placeSliders(true); });
+/* ---------- Umschalter (Einfach|Woche, Alle|Erinnerungen …): die Hinterlegung gleitet wie in der Reiterleiste ----------
+   Die Ansicht wird bei jedem Wechsel komplett neu gezeichnet. Deshalb merken wir uns pro Umschalter, wo die Hinterlegung zuletzt stand
+   (sliderPrev), setzen sie nach dem Zeichnen dorthin und lassen sie dann zum neuen Platz gleiten. Gemessen wird mit Layout-Maßen (offset*),
+   damit die Drück-Animation das Ergebnis nicht verfälscht. Markup: Container mit data-slider="<name>", der aktive Eintrag hat aria-current="page". */
+const sliderPrev = {};
+function placeSliders(instantAll) {
+  const seen = new Set();
+  document.querySelectorAll('[data-slider]').forEach((box) => {
+    const id = box.dataset.slider, cur = box.querySelector('[aria-current="page"]');
+    if (!cur || !cur.offsetWidth) return;
+    seen.add(id);
+    let ind = box.querySelector(':scope > .sl-ind');
+    if (!ind) { ind = document.createElement('span'); ind.className = 'sl-ind'; ind.setAttribute('aria-hidden', 'true'); box.prepend(ind); }
+    box.classList.add('has-ind');
+    const to = { x: cur.offsetLeft, y: cur.offsetTop, w: cur.offsetWidth, h: cur.offsetHeight };
+    const from = sliderPrev[id];
+    const set = (p) => { ind.style.width = `${p.w}px`; ind.style.height = `${p.h}px`; ind.style.transform = `translate(${p.x}px, ${p.y}px)`; };
+    const glide = !!from && !instantAll && !noMotion() && (from.x !== to.x || from.w !== to.w);
+    ind.classList.add('instant');
+    set(glide ? from : to);                                   // dort anfangen, wo die Hinterlegung beim letzten Zeichnen stand
+    void ind.offsetWidth;
+    ind.classList.remove('instant');
+    if (glide) set(to);                                       // und hinübergleiten
+    sliderPrev[id] = to;
+  });
+  Object.keys(sliderPrev).forEach((id) => { if (!seen.has(id)) delete sliderPrev[id]; });   // Umschalter nicht mehr sichtbar: beim nächsten Mal sofort platzieren
+}
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => placeSliders(true));
 const tabOf = () => (['calendar', 'report', 'habits'].includes(view) ? 'overview' : view === 'todoform' ? 'todo' : view === 'form' ? (editingId ? editBack.tab : 'new') : view);   // Kalender, Bericht, Gewohnheiten gehören zur Übersicht
 
 const VIEWS = { today: todayHTML, overview: overviewHTML, calendar: calendarHTML, report: reportHTML, form: formHTML, habits: habitsHTML, todo: todoPageHTML, todoform: todoFormHTML, settings: settingsHTML };
@@ -698,6 +726,7 @@ function render(fresh) {
     if (a.dataset.tab === cur) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
   moveIndicator(!indicatorPlaced);                            // beim ersten Mal sofort, danach gleitend
+  placeSliders();                                             // Umschalter in der Ansicht: Hinterlegung gleitet
   if (fid) { const el = $(`[data-fid="${fid}"]`); if (el) el.focus({ preventScroll: true }); }
   if (view === 'today' || view === 'report') animateBar();
   if (view === 'form' || view === 'todoform') loadEmojis().catch(() => {});   // Emoji-Liste im Hintergrund holen (Suche und Namenserkennung)
@@ -1094,7 +1123,7 @@ function habitsHTML() {
   const hs = state.habits.filter((h) => !h.archived);
   const head = `<a class="back" href="#uebersicht">${icon('left')} Übersicht</a>
     <header class="page-head left"><div class="titles"><h1>Gewohnheiten</h1><p>${hs.length} aktive ${hs.length === 1 ? 'Gewohnheit' : 'Gewohnheiten'}</p></div></header>`;
-  const filters = `<nav class="filters" aria-label="Filter">
+  const filters = `<nav class="filters" data-slider="habits" aria-label="Filter">
     <a class="chip-filter" href="#gewohnheiten" ${habitsSub === 'list' ? 'aria-current="page"' : ''}>Alle</a>
     <a class="chip-filter" href="#erinnerungen" ${habitsSub === 'reminders' ? 'aria-current="page"' : ''}>Erinnerungen</a></nav>`;
   let body;
@@ -1205,7 +1234,7 @@ function addWeekTask(k) {
 }
 function todoPageHTML() {
   const open = state.todos.filter((t) => !t.deleted && !t.done).length;
-  const seg = `<nav class="seg" aria-label="Ansicht"><a href="#todo-einfach" ${todoMode === 'simple' ? 'aria-current="page"' : ''}>Einfach</a><a href="#todo-woche" ${todoMode === 'week' ? 'aria-current="page"' : ''}>Woche</a></nav>`;
+  const seg = `<nav class="seg" data-slider="todo" aria-label="Ansicht"><a href="#todo-einfach" ${todoMode === 'simple' ? 'aria-current="page"' : ''}>Einfach</a><a href="#todo-woche" ${todoMode === 'week' ? 'aria-current="page"' : ''}>Woche</a></nav>`;
   return `<div class="view-in"><header class="page-head left"><div class="titles"><h1>To-Do</h1><p>${open} offene ${open === 1 ? 'Aufgabe' : 'Aufgaben'}</p></div></header>${seg}${todoMode === 'week' ? todoWeekHTML() : todoHTML()}</div>`;
 }
 
