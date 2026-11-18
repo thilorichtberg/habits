@@ -1978,7 +1978,7 @@ drawer.innerHTML = `<div class="drawer-head"><h2 id="drawer-title">Meine Apps</h
   <ul class="apps">
     <li><button type="button" class="app-item current" data-drawer="close" aria-current="true">${icon('today')}<span class="app-name">Habits</span></button></li>
     <li><button type="button" class="app-item" disabled>${icon('utensils')}<span class="app-name">Ernährung</span><span class="soon">Bald</span></button></li>
-    <li><button type="button" class="app-item" disabled>${icon('wallet')}<span class="app-name">Finanzen</span><span class="soon">Bald</span></button></li>
+    <li><a class="app-item" href="https://thilorichtberg.github.io/finanz-app/">${icon('wallet')}<span class="app-name">Finanzen</span></a></li>
   </ul>`;
 $('#menu-btn').addEventListener('click', () => drawer.showModal());
 drawer.addEventListener('click', (e) => { if (e.target === drawer || e.target.closest('[data-drawer="close"]')) drawer.close(); });
