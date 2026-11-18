@@ -1387,10 +1387,23 @@ let sheetCtx = null;
 function openSheet(html) {
   sheet.innerHTML = html;
   if (!sheet.open) sheet.showModal();
+  fitSheetToKeyboard();
   const h2 = sheet.querySelector('h2');                      // Fokus auf die Überschrift statt auf den ersten Knopf: nichts wirkt vorausgewählt
   if (h2) { h2.tabIndex = -1; h2.focus(); }
 }
 function closeSheet() { if (sheet.open) sheet.close(); }
+/* Tastatur: Das Blatt sitzt am unteren Rand. Auf dem iPhone legt sich die Tastatur darüber, ohne die Seite zu verkleinern.
+   Aus dem sichtbaren Bereich (visualViewport) rechnen wir aus, wie hoch die Tastatur ist, und heben das Blatt darüber. */
+function fitSheetToKeyboard() {
+  const vv = window.visualViewport;
+  if (!vv || !sheet.open) { sheet.style.removeProperty('--kb'); sheet.style.removeProperty('--vvh'); return; }
+  const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+  sheet.style.setProperty('--kb', kb + 'px');
+  sheet.style.setProperty('--vvh', Math.round(vv.height) + 'px');
+}
+if (window.visualViewport) { window.visualViewport.addEventListener('resize', fitSheetToKeyboard); window.visualViewport.addEventListener('scroll', fitSheetToKeyboard); }
+sheet.addEventListener('close', fitSheetToKeyboard);
+sheet.addEventListener('focusin', () => setTimeout(fitSheetToKeyboard, 50));
 sheet.addEventListener('click', (e) => {
   if (e.target === sheet) { closeSheet(); return; }          // Tippen neben das Blatt schließt es
   const b = e.target.closest('[data-sheet]');
@@ -1429,9 +1442,9 @@ sheet.addEventListener('keydown', (e) => {                    // Enter im Textfe
 function openOtherReason(h) {
   openSheet(`<div class="sheet-head"><h2 id="sheet-title">Sonstiger Grund</h2>
     <button type="button" class="icon-btn" data-sheet="close" aria-label="Schließen">${icon('x')}</button></div>
-    <div class="field"><label for="skip-text" class="sr">Grund für „${esc(h.name)}“</label>
-      <input id="skip-text" type="text" maxlength="80" autocomplete="off" enterkeyhint="done" placeholder="z. B. Zahnarzttermin"></div>
-    <button type="button" class="btn primary block" data-sheet="reason-text">Überspringen</button>`);
+    <div class="skip-row"><label for="skip-text" class="sr">Grund für „${esc(h.name)}“</label>
+      <input id="skip-text" type="text" maxlength="80" autocomplete="off" enterkeyhint="done" placeholder="z. B. Zahnarzttermin">
+      <button type="button" class="btn primary" data-sheet="reason-text" aria-label="Überspringen">Fertig</button></div>`);
   $('#skip-text').focus();
 }
 sheet.addEventListener('change', (e) => {

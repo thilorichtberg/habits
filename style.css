@@ -455,7 +455,7 @@ html:has(.form-page) { scroll-padding-bottom: calc(var(--tabbar-h) + 104px + env
 .rep-row.skip .mark { border: 2px solid var(--amber); color: var(--amber); }
 
 /* ---------- Unten eingeblendetes Blatt (Grund, Bestätigung) ---------- */
-#sheet { width: 100%; max-width: 560px; margin: auto auto 0; padding: var(--s3) var(--s4) calc(var(--s3) + env(safe-area-inset-bottom)); border: 0; border-radius: var(--r-lg) var(--r-lg) 0 0; background: var(--surface); color: var(--text); max-height: 85dvh; overflow: auto; }
+#sheet { width: 100%; max-width: 560px; margin: auto auto var(--kb, 0px); padding: var(--s3) var(--s4) calc(var(--s3) + env(safe-area-inset-bottom)); border: 0; border-radius: var(--r-lg) var(--r-lg) 0 0; background: var(--surface); color: var(--text); max-height: min(85dvh, calc(var(--vvh, 100dvh) - 16px)); overflow: auto; }
 #sheet[open] { display: grid; gap: var(--s2); animation: sheet-up var(--t-med) var(--ease); }
 #sheet::backdrop { background: rgba(10, 8, 5, .55); }
 @keyframes sheet-up { from { transform: translateY(32px); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -645,3 +645,8 @@ input[type="time"]::-webkit-datetime-edit { padding: 0; }
 .panel > *, .field, .row > input { min-width: 0; }
 .habit .meta .reason-text { min-width: 0; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .rep-row .val { max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
+
+/* „Sonstiger Grund“: Feld und Knopf in einer Zeile, damit das Blatt klein bleibt (die Tastatur nimmt schon die halbe Höhe) */
+.skip-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2); align-items: center; }
+.skip-row input { min-width: 0; }
+.skip-row .btn { min-height: 48px; padding: 0 var(--s4); }
