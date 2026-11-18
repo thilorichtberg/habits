@@ -27,6 +27,7 @@ const fmt = (o) => new Intl.DateTimeFormat('de-DE', o);
 /* ---------- Icons (Lucide-Stil, 24px, Strich 2) ---------- */
 const ICONS = {
   check: '<path d="M20 6 9 17l-5-5"/>',
+  grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>',
   note: '<path d="M17 10H3M21 6H3M21 14H3M17 18H3"/>',
   plus: '<path d="M5 12h14M12 5v14"/>',
   minus: '<path d="M5 12h14"/>',
@@ -69,6 +70,7 @@ function firstGrapheme(str) {                                // genau ein Zeiche
   return [...str][0] || '';
 }
 const cleanEmoji = (v) => { const g = firstGrapheme(v); return EMOJI_RE.test(g) ? g : ''; };   // Buchstaben und Ziffern werden verworfen
+const dragHandleHTML = (kind, id, name) => `<button type="button" class="drag-handle" data-action="move-menu" data-ref="${kind}:${id}" data-fid="g-${id}" aria-label="${esc(name)}: Reihenfolge ändern. Antippen öffnet Auswahl, gedrückt halten und ziehen verschiebt, Pfeil nach oben oder unten verschiebt per Tastatur.">${icon('grip')}</button>`;
 const noteMark = (d) => (d ? `<span class="note-mark" aria-hidden="true">${icon('note')}</span><span class="sr">, mit Beschreibung</span>` : '');
 const emo = (e) => (e ? `<span class="emoji" aria-hidden="true">${esc(e)}</span>` : '');
 const HABIT_EMOJIS = ['💧', '🏃', '🧘', '📚', '🍎', '🥗', '💊', '😴', '🧹', '🦷', '🚴', '🏋️', '✍️', '🌞', '🧠', '🎯'];
@@ -287,6 +289,7 @@ let updating = false;                                       // Update-Prüfung l
 const foldOpen = { skip: false, done: false, tdone: false };               // Heute: aufgeklappte Bereiche bleiben beim Neuzeichnen offen
 
 // Uhrzeit + Vorlauf statt fester Erinnerungszeit: time = "HH:MM" oder '', before = Minuten vorher (0 = pünktlich) oder null (keine Erinnerung).
+function byPos(a, b) { return ((a.pos ?? Infinity) - (b.pos ?? Infinity)) || ((a.created > b.created) - (a.created < b.created)) || 0; }   // eigene Reihenfolge, noch nicht einsortierte unten (nach Anlage-Datum, dann stabil)
 function migrateHabits(list) {
   for (const h of list) {
     if ('remind' in h) {                                    // alte Fassung: "remind" war die Erinnerungszeit → jetzt Uhrzeit, pünktlich
@@ -298,7 +301,7 @@ function migrateHabits(list) {
     if (h.time === undefined) h.time = '';
     if (h.before === undefined) h.before = null;
   }
-  return list;
+  return list.sort(byPos);
 }
 const BEFORE_OPTS = [[null, 'Nicht erinnern'], [0, 'Zur Uhrzeit'], [5, '5 Minuten vorher'], [10, '10 Minuten vorher'], [15, '15 Minuten vorher'], [30, '30 Minuten vorher'], [60, '1 Stunde vorher'], [120, '2 Stunden vorher']];
 const MAX_BEFORE = 20160;                                    // längster Vorlauf: 14 Tage in Minuten
@@ -426,6 +429,35 @@ function saveTodoPreset(name, subTexts, emoji = '') {                    // glei
   const p = { id: 'p' + now.toString(36) + Math.random().toString(36).slice(2, 5), name, emoji, subs: subTexts, deleted: false, created: now, updated: now };
   state.presets.push(p);
   touchPreset(p);
+}
+function applyOrder(kind, ids) {                             // ids = neue Reihenfolge der sichtbaren Einträge einer Liste
+  const habit = kind === 'habit', arr = habit ? state.habits : state.todos;
+  const touch = habit ? (x) => touchHabit(x) : touchTodo;
+  const live = arr.filter((x) => (habit ? !x.archived : !x.deleted)).sort(byPos);
+  live.forEach((x, i) => { if (x.pos !== i) { x.pos = i; touch(x); } });   // einmal lückenlos durchnummerieren, nur geänderte werden gespeichert
+  const items = ids.map((id) => live.find((x) => x.id === id)).filter(Boolean);
+  const slots = items.map((x) => x.pos).sort((a, b) => a - b);          // die Plätze, die diese Liste belegt, werden neu verteilt
+  items.forEach((x, i) => { if (x.pos !== slots[i]) { x.pos = slots[i]; touch(x); } });
+  arr.sort(byPos);
+  save(); queuePush(); render();
+}
+function openMoveMenu(ref) {                                 // Alternative zum Ziehen: Antippen des Griffs öffnet eine Auswahl (WCAG 2.5.7)
+  const li = document.querySelector(`li[data-ord="${ref}"]`);
+  if (!li) return;
+  const ids = [...li.parentElement.children].filter((c) => c.dataset.ord).map((c) => c.dataset.ord.split(':')[1]);
+  const [kind, id] = ref.split(':'), i = ids.indexOf(id), n = ids.length;
+  const item = kind === 'habit' ? state.habits.find((x) => x.id === id) : findTodo(id);
+  if (!item || i < 0) return;
+  sheetCtx = { move: { kind, id, ids } };
+  openSheet(`<div class="sheet-head"><h2 id="sheet-title">„${esc(kind === 'habit' ? item.name : item.text)}“ verschieben</h2>
+    <button type="button" class="icon-btn" data-sheet="close" aria-label="Schließen">${icon('x')}</button></div>
+    <p class="sheet-note">Position ${i + 1} von ${n}. Du kannst die Zeile auch am Griff halten und ziehen.</p>
+    <div class="reasons two">
+      <button type="button" class="reason" data-sheet="move-top" ${i === 0 ? 'disabled' : ''}><strong>Ganz oben</strong></button>
+      <button type="button" class="reason" data-sheet="move-bottom" ${i === n - 1 ? 'disabled' : ''}><strong>Ganz unten</strong></button>
+      <button type="button" class="reason" data-sheet="move-up" ${i === 0 ? 'disabled' : ''}><strong>Nach oben</strong></button>
+      <button type="button" class="reason" data-sheet="move-down" ${i === n - 1 ? 'disabled' : ''}><strong>Nach unten</strong></button>
+    </div>`);
 }
 function askRemovePreset(id) {
   const p = state.presets.find((x) => x.id === id && !x.deleted);
@@ -637,7 +669,7 @@ function todayHTML() {
 
   let main;
   if (!hs.length) main = `<div class="empty"><h2>Für diesen Tag ist nichts geplant</h2><p>Heute ist Pause.</p></div>`;
-  else if (open.length) main = `<ul class="list">${open.map((h) => habitRow(k, h, isFuture, canSwipe)).join('')}</ul>${canSwipe ? `<p class="hint swipe-hint">Nach links wischen löscht, nach rechts überspringt. Lange drücken zeigt Details.</p>` : ''}`;
+  else if (open.length) main = `<ul class="list">${open.map((h) => habitRow(k, h, isFuture, canSwipe, canSwipe && open.length > 1)).join('')}</ul>${canSwipe ? `<p class="hint swipe-hint">Nach links wischen löscht, nach rechts überspringt. Lange drücken zeigt Details, am Griff ziehen sortiert.</p>` : ''}`;
   else main = `<div class="empty compact"><h2>Nichts mehr offen</h2><p>Gut gemacht.</p></div>`;
 
   const folds = foldHTML('skip', 'Übersprungen', skipped, (h) => skippedRow(k, h, isFuture)) + foldHTML('done', 'Erledigt', done, (h) => habitRow(k, h, isFuture, false));
@@ -652,28 +684,29 @@ function foldHTML(id, title, items, rowFn) {
     <ul class="list">${items.map(rowFn).join('')}</ul></details>`;
 }
 
-function habitInner(k, h, disabled) {
+function habitInner(k, h, disabled, drag) {
   const c = count(k, h.id);
   const isDone = c >= h.target;
   const meta = h.time ? `${icon('clock')} ${esc(h.time)}${h.before !== null ? `${icon('bell')}<span class="sr">, mit Erinnerung</span>` : ''}` : '';
   // Nur der Kreis links schließt den Habit ab. Der Rest der Zeile (Name, Zeit, freie Fläche) öffnet die Bearbeitung.
   const check = `<button type="button" class="habit-check" data-action="toggle" data-id="${h.id}" data-fid="t-${h.id}" aria-pressed="${isDone}" aria-label="${esc(h.name)}: ${isDone ? 'wieder öffnen' : 'als erledigt markieren'}" ${disabled ? 'disabled' : ''}><span class="check" aria-hidden="true">${icon('check')}</span></button>`;
   const info = `<a class="info habit-main" draggable="false" href="#bearbeiten/${h.id}" data-fid="m-${h.id}"><div class="name">${emo(h.emoji)}${esc(h.name)}${noteMark(h.desc)}</div>${meta ? `<div class="meta">${meta}</div>` : ''}</a>`;
-  if (h.target === 1) return `<div class="habit ${isDone ? 'done' : ''}" data-peek="habit:${h.id}">${check}${info}</div>`;
-  return `<div class="habit ${isDone ? 'done' : ''}" data-peek="habit:${h.id}">${check}${info}
+  const grip = drag ? dragHandleHTML('habit', h.id, h.name) : '';
+  if (h.target === 1) return `<div class="habit ${isDone ? 'done' : ''} ${drag ? 'has-handle' : ''}" data-peek="habit:${h.id}">${check}${info}${grip}</div>`;
+  return `<div class="habit ${isDone ? 'done' : ''} ${drag ? 'has-handle' : ''}" data-peek="habit:${h.id}">${check}${info}
     <div class="counter">
       <button class="icon-btn" data-action="dec" data-id="${h.id}" data-fid="d-${h.id}" aria-label="${esc(h.name)}: eins weniger" ${c === 0 || disabled ? 'disabled' : ''}>${icon('minus')}</button>
       <span class="count">${c}<span class="sr"> von </span><span aria-hidden="true">/</span>${h.target}</span>
       <button class="icon-btn add" data-action="inc" data-id="${h.id}" data-fid="i-${h.id}" aria-label="${esc(h.name)}: eins mehr" ${isDone || disabled ? 'disabled' : ''}>${icon('plus')}</button>
-    </div></div>`;
+    </div>${grip}</div>`;
 }
-function habitRow(k, h, disabled, swipe) {
-  return swipe ? swipeRow(h, habitInner(k, h, disabled), true) : `<li>${habitInner(k, h, disabled)}</li>`;
+function habitRow(k, h, disabled, swipe, drag) {
+  return swipe ? swipeRow(h, habitInner(k, h, disabled, drag), true, drag ? `habit:${h.id}` : '') : `<li>${habitInner(k, h, disabled)}</li>`;
 }
 // Zeile zum Wischen: nach links = löschen (rot), nach rechts = überspringen (nur wenn skip = true).
 // Dazu zwei Knöpfe, die erst beim Tastatur-Fokus sichtbar sind (Alternative zur Wischgeste, auch für Screenreader).
-function swipeRow(h, inner, skip) {
-  return `<li class="swipe" data-id="${h.id}" data-right="${skip ? 1 : 0}">
+function swipeRow(h, inner, skip, ord) {
+  return `<li class="swipe" data-id="${h.id}" data-right="${skip ? 1 : 0}" ${ord ? `data-ord="${ord}"` : ''}>
     ${skip ? `<div class="swipe-bg skip" aria-hidden="true">${icon('skip')}</div>` : ''}
     <div class="swipe-bg del" aria-hidden="true">${icon('trash')}</div>
     <div class="swipe-front">${inner}</div>
@@ -980,35 +1013,37 @@ function todoHTML() {
 const todoMatches = (t, q) => !q || t.text.toLowerCase().includes(q) || t.subs.some((s) => s.text.toLowerCase().includes(q));
 function todoResultsHTML() {
   const q = todoQuery.trim().toLowerCase();
-  const all = state.todos.filter((t) => !t.deleted && todoMatches(t, q)).sort((a, b) => b.created - a.created);   // neueste oben
+  const all = state.todos.filter((t) => !t.deleted && todoMatches(t, q)).sort(byPos);   // eigene Reihenfolge, neue Aufgaben ganz unten
   const today = all.filter((t) => !t.done && t.list === 'today');
   const later = all.filter((t) => !t.done && t.list === 'later');
   const done = all.filter((t) => t.done).sort((a, b) => b.updated - a.updated);
   const section = (id, title, items, empty) => `<section class="group" aria-labelledby="${id}"><h2 id="${id}">${title} <span class="count-badge">${items.length}</span></h2>
-    ${items.length ? `<ul class="list">${items.map(todoRow).join('')}</ul>` : `<p class="todo-empty">${empty}</p>`}</section>`;
+    ${items.length ? `<ul class="list">${items.map((t) => todoRow(t, items.length > 1)).join('')}</ul>` : `<p class="todo-empty">${empty}</p>`}</section>`;
   if (q && !all.length) return `<p class="todo-empty">Keine Treffer für „${esc(todoQuery.trim())}“.</p>`;
   return `${section('t-today', 'Heute', today, q ? 'Keine Treffer.' : 'Nichts für heute.')}
     ${section('t-later', 'Später', later, q ? 'Keine Treffer.' : 'Leer. Nach rechts wischen schiebt eine Aufgabe hierher.')}
-    ${all.length ? '<p class="hint swipe-hint">Nach rechts wischen verschiebt zwischen Heute und Später, nach links löscht. Lange drücken zeigt Details.</p>' : ''}
+    ${all.length ? '<p class="hint swipe-hint">Nach rechts wischen verschiebt zwischen Heute und Später, nach links löscht. Lange drücken zeigt Details, am Griff ziehen sortiert.</p>' : ''}
     ${foldHTML('tdone', 'Erledigt', done, todoRow)}`;
 }
 const openSubs = new Set();                                  // Aufgaben mit aufgeklappten Unterpunkten (Standard: eingeklappt, gilt nur bis zum Neuladen)
-function todoRow(t) {
+function todoRow(t, canDrag) {
   const subs = t.subs || [];
   const nDone = subs.filter((x) => x.done).length;
   const q = todoQuery.trim().toLowerCase();
+  const drag = !!canDrag && !t.done && !todoQuery.trim();     // Verschieben nur in den offenen Listen und nicht während einer Suche
   const isOpen = openSubs.has(t.id) || (!!q && subs.some((x) => x.text.toLowerCase().includes(q)));   // Treffer in einem Unterpunkt zeigt ihn gleich
   const inner = `<div class="todo ${t.done ? 'done' : ''}" data-peek="todo:${t.id}">
     <div class="todo-main">
       <button type="button" class="todo-check" data-action="todo-toggle" data-id="${t.id}" data-fid="tc-${t.id}" aria-pressed="${t.done}" aria-label="${esc(t.text)}: ${t.done ? 'wieder öffnen' : 'als erledigt markieren'}"><span class="check" aria-hidden="true">${icon('check')}</span></button>
       <button type="button" class="todo-text" data-action="todo-edit" data-id="${t.id}" data-fid="te-${t.id}">${emo(t.emoji)}${esc(t.text)}${noteMark(t.desc)}</button>
       ${subs.length ? `<button type="button" class="todo-progress ${nDone === subs.length ? 'all' : ''}" data-action="subs-toggle" data-id="${t.id}" data-fid="tp-${t.id}" aria-expanded="${isOpen}" aria-controls="subs-${t.id}" aria-label="Unterpunkte, ${nDone} von ${subs.length} erledigt"><span aria-hidden="true">${nDone}/${subs.length}</span>${icon('right', 'chev')}</button>` : ''}
+      ${drag ? dragHandleHTML('todo', t.id, t.text) : ''}
     </div>
     ${subs.length ? `<div class="subs-wrap ${isOpen ? 'open' : ''}"><ul class="subs" id="subs-${t.id}">${subs.map((x) => `<li class="sub ${x.done ? 'done' : ''}">
       <button type="button" class="sub-check" data-action="sub-toggle" data-id="${t.id}" data-sub="${x.id}" data-fid="sc-${x.id}" aria-pressed="${x.done}" aria-label="${esc(x.text)}: ${x.done ? 'wieder öffnen' : 'als erledigt markieren'}"><span class="check small" aria-hidden="true">${icon('check')}</span></button>
       <span class="sub-text">${esc(x.text)}</span></li>`).join('')}</ul></div>` : ''}</div>`;
   const target = t.list === 'today' ? 'Später' : 'Heute';
-  return `<li class="swipe" data-kind="todo" data-id="${t.id}" data-right="${t.done ? 0 : 1}">
+  return `<li class="swipe" data-kind="todo" data-id="${t.id}" data-right="${t.done ? 0 : 1}" ${drag ? `data-ord="todo:${t.id}"` : ''}>
     ${t.done ? '' : `<div class="swipe-bg skip" aria-hidden="true">${icon(t.list === 'today' ? 'clock' : 'calendar')}</div>`}
     <div class="swipe-bg del" aria-hidden="true">${icon('trash')}</div>
     <div class="swipe-front">${inner}</div>
@@ -1158,7 +1193,7 @@ function timeFromCloud(r) {                                  // neue Spalten at_
   return { time: t ? t.slice(0, 5) : '', before: t ? before : null };
 }
 function habitFromCloud(r) {
-  return { id: r.id, name: r.name, emoji: r.emoji || '', desc: r.description || '', target: r.target, days: r.days, ...timeFromCloud(r), created: r.created, archived: r.archived || null, updated: Date.parse(r.updated_at) };
+  return { id: r.id, name: r.name, emoji: r.emoji || '', desc: r.description || '', pos: r.sort_pos ?? undefined, target: r.target, days: r.days, ...timeFromCloud(r), created: r.created, archived: r.archived || null, updated: Date.parse(r.updated_at) };
 }
 function setLocalCount(day, id, n) {
   const d = (state.log[day] = state.log[day] || {});
@@ -1182,7 +1217,7 @@ function setLocalSkip(day, id, reason) {
   if (!Object.keys(d).length) delete state.skip[day];
 }
 function todoFromCloud(r) {
-  return { id: r.id, text: r.text, list: r.list, done: !!r.done, deleted: !!r.deleted, emoji: r.emoji || '', desc: r.description || '', subs: Array.isArray(r.subs) ? r.subs : [], created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
+  return { id: r.id, text: r.text, list: r.list, done: !!r.done, deleted: !!r.deleted, emoji: r.emoji || '', desc: r.description || '', pos: r.sort_pos ?? undefined, subs: Array.isArray(r.subs) ? r.subs : [], created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
 }
 function presetFromCloud(r) {
   return { id: r.id, name: r.name, emoji: r.emoji || '', subs: Array.isArray(r.subs) ? r.subs : [], deleted: !!r.deleted, created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
@@ -1239,6 +1274,7 @@ function mergeFromCloud(habitRows, logRows, todoRows = [], presetRows = [], sett
   if (mergeList(state.todos, todoRows, todoFromCloud, state.dirty.todos)) changed = true;
   if (mergeList(state.presets, presetRows, presetFromCloud, state.dirty.presets)) changed = true;
   if (mergeSettings(settingsRows)) changed = true;
+  state.habits.sort(byPos); state.todos.sort(byPos);
   return changed;
 }
 async function upsertChunks(table, rows, onConflict) {
@@ -1251,9 +1287,9 @@ async function pushDirty() {
   const uid = cloud.user.id;
   const hs = state.habits.filter((h) => state.dirty.habits[h.id]);
   const ls = Object.keys(state.dirty.logs).map((k) => { const [day, id] = splitKey(k); return { k, day, id, ts: state.ts[k] || 0, count: count(day, id), skip: skipOf(day, id) }; });
-  await upsertChunks('habits', hs.map((h) => ({ user_id: uid, id: h.id, name: h.name, emoji: h.emoji || null, description: h.desc || null, target: h.target, days: h.days, at_time: h.time || null, remind_before: h.time && h.before != null ? h.before : null, remind: null, created: h.created, archived: h.archived || null, updated_at: msToIso(h.updated) })), 'user_id,id');
+  await upsertChunks('habits', hs.map((h) => ({ user_id: uid, id: h.id, name: h.name, emoji: h.emoji || null, description: h.desc || null, sort_pos: h.pos ?? null, target: h.target, days: h.days, at_time: h.time || null, remind_before: h.time && h.before != null ? h.before : null, remind: null, created: h.created, archived: h.archived || null, updated_at: msToIso(h.updated) })), 'user_id,id');
   const ts = state.todos.filter((t) => state.dirty.todos[t.id]);
-  await upsertChunks('todos', ts.map((t) => ({ user_id: uid, id: t.id, text: t.text, emoji: t.emoji || null, description: t.desc || null, list: t.list, done: t.done, deleted: t.deleted, subs: t.subs || [], created_at: msToIso(t.created), updated_at: msToIso(t.updated) })), 'user_id,id');
+  await upsertChunks('todos', ts.map((t) => ({ user_id: uid, id: t.id, text: t.text, emoji: t.emoji || null, description: t.desc || null, sort_pos: t.pos ?? null, list: t.list, done: t.done, deleted: t.deleted, subs: t.subs || [], created_at: msToIso(t.created), updated_at: msToIso(t.updated) })), 'user_id,id');
   const ps = state.presets.filter((p) => state.dirty.presets[p.id]);
   await upsertChunks('todo_presets', ps.map((p) => ({ user_id: uid, id: p.id, name: p.name, emoji: p.emoji || null, subs: p.subs, deleted: p.deleted, created_at: msToIso(p.created), updated_at: msToIso(p.updated) })), 'user_id,id');
   await upsertChunks('logs', ls.map((l) => ({ user_id: uid, day: l.day, habit_id: l.id, count: l.count, skip: l.skip, updated_at: msToIso(l.ts) })), 'user_id,day,habit_id');
@@ -1353,6 +1389,13 @@ sheet.addEventListener('click', (e) => {
   if (e.target === sheet) { closeSheet(); return; }          // Tippen neben das Blatt schließt es
   const b = e.target.closest('[data-sheet]');
   if (!b || !sheetCtx) return;
+  if (sheetCtx.move) {
+    const { kind, id, ids } = sheetCtx.move, m = b.dataset.sheet, i = ids.indexOf(id);
+    closeSheet();
+    const j = m === 'move-top' ? 0 : m === 'move-bottom' ? ids.length - 1 : m === 'move-up' ? i - 1 : m === 'move-down' ? i + 1 : i;
+    if (j !== i && j >= 0 && j < ids.length) { const next = ids.slice(); next.splice(i, 1); next.splice(j, 0, id); applyOrder(kind, next); announce(`Position ${j + 1} von ${ids.length}`); }
+    return;
+  }
   if (sheetCtx.presetId) { const pid = sheetCtx.presetId; closeSheet(); if (b.dataset.sheet === 'confirm-preset-del') removePreset(pid); return; }
   const h = state.habits.find((x) => x.id === sheetCtx.id);
   const { k } = sheetCtx;
@@ -1536,6 +1579,7 @@ $('#view').addEventListener('click', (e) => {
     case 'sub-del': delSubRow(el.dataset.sid); break;
     case 'preset-load': applyPreset(el.dataset.id); break;
     case 'preset-del': askRemovePreset(el.dataset.id); break;
+    case 'move-menu': openMoveMenu(el.dataset.ref); break;
     case 'peek-open': { const [kd, pid] = el.dataset.ref.split(':'); openPeek(kd, pid, el.closest('li') || el); break; }
     case 'todo-form-del': { const id = editingTodoId; todoForm = null; removeTodo(id, false); location.hash = '#todo'; break; }
     case 'todo-move': moveTodo(el.dataset.id); break;
@@ -1570,7 +1614,7 @@ let sw = null, swSuppress = false;
 $('#view').addEventListener('pointerdown', (e) => {
   const li = e.target.closest('.swipe');
   if (!li || (e.pointerType === 'mouse' && e.button !== 0)) return;
-  if (e.target.closest('input, select, textarea, summary, .swipe-alt')) return;
+  if (e.target.closest('input, select, textarea, summary, .swipe-alt, .drag-handle')) return;
   sw = { li, front: li.querySelector('.swipe-front'), x: e.clientX, y: e.clientY, pid: e.pointerId, locked: false, dx: 0, right: li.dataset.right === '1' };
 });
 window.addEventListener('pointermove', (e) => {
@@ -1677,7 +1721,7 @@ function clearLp() { if (lp) { clearTimeout(lp.t); lp = null; } }
 $('#view').addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   const src = e.target.closest('[data-peek]');
-  if (!src || e.target.closest('input, select, textarea, .swipe-alt')) return;
+  if (!src || e.target.closest('input, select, textarea, .swipe-alt, .drag-handle')) return;
   clearLp();
   lp = { src, x: e.clientX, y: e.clientY, pid: e.pointerId, t: setTimeout(() => {
     const l = lp; lp = null;
@@ -1694,6 +1738,113 @@ window.addEventListener('pointerup', lpEnd);
 window.addEventListener('pointercancel', lpEnd);
 $('#view').addEventListener('click', (e) => { if (Date.now() < lpBlock) { e.preventDefault(); e.stopPropagation(); } }, true);
 $('#view').addEventListener('contextmenu', (e) => { if (e.target.closest('[data-peek]')) e.preventDefault(); });
+
+/* ---------- Verschieben: Griff mit sechs Punkten ----------
+   Auf dem Griff (touch-action: none) beginnt das Ziehen nach DG_HOLD ms Halten oder sobald der Finger sich bewegt. Die Zeile hebt
+   sich ab, die anderen weichen aus; beim Loslassen rastet sie ein und die Reihenfolge wird gespeichert (applyOrder). Am Rand scrollt die Seite mit. */
+const DG_HOLD = 220, DG_MOVE = 6;
+let dg = null;
+$('#view').addEventListener('pointerdown', (e) => {
+  const hd = e.target.closest('.drag-handle');
+  if (!hd || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  const li = hd.closest('li[data-ord]');
+  if (!li) return;
+  dg = { hd, li, ul: li.parentElement, pid: e.pointerId, y0: e.clientY, y: e.clientY, sy0: window.scrollY, active: false, timer: setTimeout(startDrag, DG_HOLD) };
+  try { hd.setPointerCapture(e.pointerId); } catch (_) { /* egal */ }
+});
+function startDrag() {
+  const d = dg;
+  if (!d || d.active || !document.contains(d.li)) return;
+  d.active = true;
+  clearTimeout(d.timer); clearLp(); sw = null; clearPress();
+  d.items = [...d.ul.children].filter((c) => c.dataset.ord);
+  d.rects = d.items.map((c) => c.getBoundingClientRect());
+  d.idx = d.items.indexOf(d.li); d.to = d.idx;
+  const gap = d.rects.length > 1 ? Math.max(0, d.rects[1].top - d.rects[0].bottom) : 0;
+  d.h = d.rects[d.idx].height + gap;
+  d.li.classList.add('lifting'); d.ul.classList.add('reordering');
+  d.items.forEach((c) => { if (c !== d.li) c.style.transition = noMotion() ? 'none' : 'transform 170ms var(--ease)'; });
+  if (navigator.vibrate) navigator.vibrate(12);
+  announce('Verschieben: nach oben oder unten ziehen, loslassen zum Ablegen');
+  const tick = () => {
+    if (!dg || !dg.active) return;
+    const edge = 80, bottom = window.innerHeight - 120;       // unten liegt die Reiterleiste
+    const v = dg.y < edge ? -Math.ceil((edge - dg.y) / 6) : dg.y > bottom ? Math.ceil((dg.y - bottom) / 6) : 0;
+    if (v) { window.scrollBy(0, Math.max(-16, Math.min(16, v))); dragMove(); }
+    dg.raf = requestAnimationFrame(tick);
+  };
+  d.raf = requestAnimationFrame(tick);
+  dragMove();
+}
+function dragMove() {
+  const d = dg;
+  if (!d || !d.active) return;
+  if (!document.contains(d.li)) { endDrag(true); return; }
+  const first = d.rects[0], last = d.rects[d.rects.length - 1], me = d.rects[d.idx];
+  const dy = Math.max(first.top - me.top, Math.min(last.bottom - me.bottom, (d.y - d.y0) + (window.scrollY - d.sy0)));
+  d.li.style.transform = `translateY(${dy}px) scale(1.02)`;
+  const topE = me.top + dy, botE = me.bottom + dy;          // Ränder der gezogenen Zeile gegen die Mitte der anderen (so klappt es auch ganz oben und ganz unten)
+  let to = d.idx;
+  d.rects.forEach((r, i) => {
+    const mid = r.top + r.height / 2;
+    if (i > d.idx && botE > mid) to = Math.max(to, i);
+    if (i < d.idx && topE < mid) to = Math.min(to, i);
+  });
+  d.to = to;
+  d.items.forEach((c, i) => {
+    if (i === d.idx) return;
+    const shift = d.idx < to && i > d.idx && i <= to ? -d.h : d.idx > to && i < d.idx && i >= to ? d.h : 0;
+    c.style.transform = shift ? `translateY(${shift}px)` : '';
+  });
+}
+window.addEventListener('pointermove', (e) => {
+  if (!dg || e.pointerId !== dg.pid) return;
+  dg.y = e.clientY;
+  if (!dg.active && Math.abs(dg.y - dg.y0) > DG_MOVE) startDrag();
+  if (dg.active) dragMove();
+});
+function endDrag(cancel) {
+  const d = dg;
+  if (!d) return;
+  dg = null; clearTimeout(d.timer);
+  if (!d.active) return;
+  cancelAnimationFrame(d.raf);
+  swSuppress = true; setTimeout(() => { swSuppress = false; }, 80);   // der Klick nach dem Loslassen soll nichts auslösen
+  const move = !cancel && d.to !== d.idx;
+  const clean = () => { d.items.forEach((c) => { c.style.transform = ''; c.style.transition = ''; c.classList.remove('lifting'); }); d.ul.classList.remove('reordering'); };
+  if (!move) {
+    d.li.style.transition = noMotion() ? 'none' : 'transform 170ms var(--ease)'; d.li.style.transform = '';
+    setTimeout(clean, 190);
+    return;
+  }
+  const ids = d.items.map((c) => c.dataset.ord.split(':')[1]);
+  const [m] = ids.splice(d.idx, 1); ids.splice(d.to, 0, m);
+  const me = d.rects[d.idx], tg = d.rects[d.to];
+  const final = d.to > d.idx ? tg.bottom - me.bottom : tg.top - me.top;
+  const kind = d.li.dataset.ord.split(':')[0];
+  const apply = () => { clean(); applyOrder(kind, ids); announce(`Reihenfolge geändert: Position ${d.to + 1} von ${ids.length}`); };
+  if (noMotion()) { apply(); return; }
+  d.li.style.transition = 'transform 150ms var(--ease)';
+  d.li.style.transform = `translateY(${final}px)`;
+  setTimeout(apply, 160);
+}
+window.addEventListener('pointerup', (e) => { if (dg && e.pointerId === dg.pid) endDrag(false); });
+window.addEventListener('pointercancel', (e) => { if (dg && e.pointerId === dg.pid) endDrag(true); });
+$('#view').addEventListener('keydown', (e) => {              // Tastatur: Pfeil hoch/runter auf dem Griff verschiebt um einen Platz
+  const hd = e.target.closest && e.target.closest('.drag-handle');
+  if (!hd || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+  const li = hd.closest('li[data-ord]');
+  if (!li) return;
+  e.preventDefault();
+  const items = [...li.parentElement.children].filter((c) => c.dataset.ord);
+  const i = items.indexOf(li), j = i + (e.key === 'ArrowUp' ? -1 : 1);
+  if (j < 0 || j >= items.length) return;
+  const ids = items.map((c) => c.dataset.ord.split(':')[1]);
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  applyOrder(li.dataset.ord.split(':')[0], ids);
+  announce(`Position ${j + 1} von ${ids.length}`);
+});
+$('#view').addEventListener('contextmenu', (e) => { if (e.target.closest('.drag-handle')) e.preventDefault(); });
 
 function shiftMonth(n) {
   const d = new Date(calMonth.y, calMonth.m + n, 1);
