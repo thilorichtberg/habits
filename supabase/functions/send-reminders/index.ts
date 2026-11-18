@@ -84,6 +84,14 @@ function dailyOpenHabits(habits: any[], logs: any[], day: string, weekday: numbe
     return !(l && l.count >= h.target);
   });
 }
+// To-Do-Erinnerungen nutzen dieselbe Rechnung wie die Habits: Eine Aufgabe ist ein Habit, der nur an ihrem Tag stattfindet.
+function todoOccurrences(todos: any[], day: string, minutes: number, lateMin = 10) {
+  const asHabits = todos.map((t) => {
+    const n = dayNum(t.due_day);
+    return { ...t, days: [dayWeekday(n)], created: t.due_day, archived: dayStr(n + 1) };   // genau ein Tag: der Tag der Aufgabe
+  });
+  return dueOccurrences(asHabits, day, minutes, lateMin);
+}
 // --- Ende Fälligkeit ---
 
 // --- Texte der Benachrichtigungen (rein, wird getestet) ---
@@ -92,6 +100,11 @@ const fmtLead = (b: number) => {
   const d = Math.floor(b / 1440), h = Math.floor((b % 1440) / 60), m = b % 60;
   return [d && `${d} ${d === 1 ? 'Tag' : 'Tage'}`, h && `${h} ${h === 1 ? 'Stunde' : 'Stunden'}`, m && `${m} ${m === 1 ? 'Minute' : 'Minuten'}`].filter(Boolean).join(' ');
 };
+function whenWord(occDay: string, day: string): string {
+  return occDay === day ? 'um '
+    : occDay === dayStr(dayNum(day) + 1) ? 'morgen um '
+    : `am ${new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(dayNum(occDay) * 86400000))} um `;
+}
 const habitLabel = (h: any) => (h.emoji ? h.emoji + ' ' : '') + h.name;
 function reminderBody(h: any, b: number, when: string, t: string): string {
   const goal = h.target > 1 ? ` · Ziel: ${h.target}×` : '';
@@ -170,6 +183,28 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ---- To-Do-Erinnerungen (Tag + Uhrzeit der Aufgabe, gleiche Logik wie bei den Habits) ----
+    try {
+    const { data: todos, error: todoErr } = await db.from('todos')
+      .select('id,text,emoji,due_day,at_time,remind_before')
+      .eq('user_id', uid).eq('done', false).eq('deleted', false)
+      .not('due_day', 'is', null).not('at_time', 'is', null).not('remind_before', 'is', null)
+      .gte('due_day', day).lte('due_day', dayStr(dayNum(day) + 16));
+    if (todoErr) throw todoErr;
+    for (const { h, occDay } of todoOccurrences(todos ?? [], day, minutes, LATE_MIN)) {
+      const { data: claimed } = await db.from('reminders_sent')
+        .upsert({ user_id: uid, day: occDay, habit_id: 'todo:' + h.id }, { onConflict: 'user_id,day,habit_id', ignoreDuplicates: true })
+        .select();
+      if (!claimed?.length) continue;
+      const payload = JSON.stringify({
+        title: 'Habits',
+        body: reminderBody({ emoji: h.emoji, name: h.text, target: 1 }, h.remind_before, whenWord(occDay, day), String(h.at_time).slice(0, 5)),
+        tag: 'todo-' + h.id + '-' + occDay,
+      });
+      for (const s of list) sent += await send(s, payload);
+    }
+    } catch (e) { console.error('To-Do-Erinnerungen fehlgeschlagen', e); }   // darf die Habit-Erinnerungen nie stoppen
+
     const { data: habits } = await db.from('habits')
       .select('id,name,emoji,target,days,at_time,remind_before,created,archived')
       .eq('user_id', uid).not('at_time', 'is', null).not('remind_before', 'is', null).lte('created', day);
@@ -193,9 +228,7 @@ Deno.serve(async (req) => {
 
       const t = String(h.at_time).slice(0, 5);
       const b = h.remind_before;
-      const when = occDay === day ? 'um '
-        : occDay === dayStr(dayNum(day) + 1) ? 'morgen um '
-        : `am ${new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(dayNum(occDay) * 86400000))} um `;
+      const when = whenWord(occDay, day);
       const payload = JSON.stringify({
         title: 'Habits',
         body: reminderBody(h, b, when, t),

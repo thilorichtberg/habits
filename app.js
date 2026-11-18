@@ -326,7 +326,7 @@ function load() {
     const r = JSON.parse(localStorage.getItem(KEY));
     if (r && Array.isArray(r.habits)) {
       const dirty = r.dirty || {};
-      return { habits: migrateHabits(r.habits), log: r.log || {}, skip: r.skip || {}, todos: (r.todos || []).map((t) => ({ ...t, subs: t.subs || [], emoji: t.emoji || '', desc: t.desc || '' })), presets: r.presets || [], settings: { ...defaultSettings(), ...(r.settings || {}) }, ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {}, todos: dirty.todos || {}, presets: dirty.presets || {}, settings: !!dirty.settings }, notified: r.notified || {} };
+      return { habits: migrateHabits(r.habits), log: r.log || {}, skip: r.skip || {}, todos: (r.todos || []).map((t) => ({ ...t, subs: t.subs || [], emoji: t.emoji || '', desc: t.desc || '', day: t.day || '', time: t.time || '', before: t.before ?? null })), presets: r.presets || [], settings: { ...defaultSettings(), ...(r.settings || {}) }, ts: r.ts || {}, dirty: { habits: dirty.habits || {}, logs: dirty.logs || {}, todos: dirty.todos || {}, presets: dirty.presets || {}, settings: !!dirty.settings }, notified: r.notified || {} };
     }
   } catch (e) { /* leer starten */ }
   return emptyState();
@@ -368,7 +368,34 @@ function dayPct(k) {
   const sum = hs.reduce((a, h) => a + Math.min(count(k, h.id) / h.target, 1), 0);
   return Math.round((sum / hs.length) * 100);
 }
+/* ---------- Abhak-Animation ----------
+   Die Zeile füllt sich, der Haken wird gezeichnet, ein Ring und acht Funken gehen vom Kreis aus. Weil eine erledigte Zeile danach
+   in den eingeklappten Bereich „Erledigt“ wandert, bleibt sie FX_MS lang sichtbar, erst dann wird neu gezeichnet. */
+const FX_MS = 560;
+let fxTimer = null, pendingFx = [], lastStreak = null;
+function flushFx() { if (fxTimer) { clearTimeout(fxTimer); fxTimer = null; render(); } }   // zweite Aktion während der Animation: sofort fertig zeichnen
+function celebrate(row) {
+  if (!row || noMotion()) return false;
+  row.classList.add('done', 'celebrate');
+  const chk = row.querySelector('.check');
+  if (chk) chk.insertAdjacentHTML('beforeend', Array.from({ length: 8 }, (_, i) => `<i class="spark" style="--a:${i * 45}deg"></i>`).join(''));
+  if (navigator.vibrate) navigator.vibrate(8);
+  return true;
+}
+function renderAfter(row) {                                  // Zeile feiern, dann (verzögert) neu zeichnen
+  if (celebrate(row)) { clearTimeout(fxTimer); fxTimer = setTimeout(() => { fxTimer = null; render(); }, FX_MS); } else render();
+}
+function applyPendingFx() {                                  // nach dem Neuzeichnen: Animationen für Elemente, die erst jetzt existieren
+  const list = pendingFx; pendingFx = [];
+  for (const { sel, cls } of list) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    if (cls === 'celebrate') celebrate(el); else if (!noMotion()) el.classList.add(cls);
+  }
+}
 function setCount(k, h, n) {
+  flushFx();
+  const before = count(k, h.id);
   n = Math.max(0, Math.min(h.target, n));
   const day = (state.log[k] = state.log[k] || {});
   if (n === 0) delete day[h.id]; else day[h.id] = n;
@@ -378,7 +405,11 @@ function setCount(k, h, n) {
   state.dirty.logs[tk] = 1;
   save();
   queuePush();
-  render();
+  if (before < h.target && n >= h.target && view === 'today') renderAfter(document.querySelector(`.habit[data-peek="habit:${h.id}"]`));
+  else {
+    if (n > before && h.target > 1) pendingFx.push({ sel: `.habit[data-peek="habit:${h.id}"] .count`, cls: 'bump' });
+    render();
+  }
   announce(h.target === 1 ? `${h.name}: ${n ? 'erledigt' : 'offen'}` : `${h.name}: ${n} von ${h.target}${n >= h.target ? ', erledigt' : ''}`);
 }
 function setSkip(k, h, reason) {                            // reason = Grund-ID oder null (Überspringen aufheben)
@@ -424,6 +455,17 @@ function daysLabel(days) {
    Eine Aufgabe liegt in "Heute" oder "Später" und kann erledigt werden. Löschen markiert nur (deleted),
    damit es auf allen Geräten ankommt und per "Wiederherstellen" zurückgenommen werden kann. */
 const findTodo = (id) => state.todos.find((t) => t.id === id);
+/* ---------- To-Do: Tag, Uhrzeit, Erinnerung. Ohne Tag gilt weiter „Bereich“ (Heute/Später). Überfällige offene Aufgaben rutschen auf Heute. ---------- */
+const todoDayEff = (t) => (t.day ? (t.day < todayKey() && !t.done ? todayKey() : t.day) : (t.list === 'today' ? todayKey() : ''));
+const todoSection = (t) => (t.done ? 'done' : todoDayEff(t) === todayKey() ? 'today' : 'later');
+const todoRemindActive = (t) => !!(t.day && t.time && t.before !== null && t.before !== undefined);
+function todoWhenHTML(t, week) {                             // kleine Zeile unter dem Titel: Datum, Uhrzeit, Glocke
+  const late = !!t.day && t.day < todayKey() && !t.done;
+  const dayTxt = t.day && !week && (t.day !== todayKey() || late) ? fmt({ weekday: 'short', day: 'numeric', month: 'short' }).format(parse(t.day)) : '';
+  if (!dayTxt && !t.time) return '';
+  const bell = todoRemindActive(t) ? `${icon('bell')}<span class="sr">, mit Erinnerung</span>` : '';
+  return `<small class="todo-when ${late ? 'late' : ''}">${icon('clock')} ${[late ? 'Überfällig' : '', dayTxt, t.time ? esc(t.time) + ' Uhr' : ''].filter(Boolean).join(' · ')}${bell}</small>`;
+}
 function touchTodo(t) { t.updated = Date.now(); state.dirty.todos[t.id] = 1; save(); queuePush(); }
 const newSid = () => 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const activePresets = () => state.presets.filter((p) => !p.deleted).sort((a, b) => a.name.localeCompare(b.name, 'de'));
@@ -484,26 +526,41 @@ function toggleSub(todoId, subId) {
   const t = findTodo(todoId);
   const s = t && t.subs.find((x) => x.id === subId);
   if (!s) return;
+  flushFx();
   s.done = !s.done;
+  if (s.done) {
+    pendingFx.push({ sel: `.sub-check[data-sub="${subId}"]`, cls: 'celebrate' });
+    if (t.subs.every((x) => x.done)) pendingFx.push({ sel: `.todo[data-peek="todo:${todoId}"] .todo-progress`, cls: 'pill-pop' });
+  }
   touchTodo(t); render();
   announce(`${s.text}: ${s.done ? 'erledigt' : 'wieder offen'}`);
 }
 // ---- Seite "Neue Aufgabe" / "Aufgabe bearbeiten": Titel, Unterpunkte, Bereich, Preset
 function newTodoDraft(t) {
-  return t ? { text: t.text, desc: t.desc || '', emoji: t.emoji || '', emojiManual: true, subs: t.subs.map((s) => ({ ...s })), list: t.list, savePreset: false }
-           : { text: '', desc: '', emoji: '', emojiManual: false, subs: [], list: 'today', savePreset: false };
+  const d = t ? { text: t.text, desc: t.desc || '', emoji: t.emoji || '', emojiManual: true, subs: t.subs.map((s) => ({ ...s })), list: t.list, day: t.day || '', savePreset: false }
+              : { text: '', desc: '', emoji: '', emojiManual: false, subs: [], list: 'today', day: '', savePreset: false };
+  return Object.assign(d, reminderDraft(t ? t.time : '', t ? t.before : null));
 }
 function syncTodoDraft() {                                   // DOM → Entwurf
   if (!todoForm || !$('#todo-edit-form')) return;
   const prev = new Map(todoForm.subs.map((s) => [s.id, s]));
   todoForm.text = $('#tf-text').value;
   todoForm.desc = $('#tf-desc').value;
+  todoForm.day = $('#tf-day').value;
+  readReminder('tf-', todoForm);
   todoForm.emoji = cleanEmoji($('#tf-emoji').value);
   todoForm.emojiManual = $('.symbol-btn[data-target="tf-emoji"]').dataset.manual === '1';
   todoForm.subs = [...document.querySelectorAll('#todo-edit-form .sub-input')].map((i) => ({ id: i.dataset.sid, text: i.value, done: !!(prev.get(i.dataset.sid) || {}).done }));
   const l = document.querySelector('#todo-edit-form input[name="tf-list"]:checked');
   if (l) todoForm.list = l.value;
   todoForm.savePreset = $('#tf-preset').checked;
+}
+function todoFormInput(e) {                                  // Tag, Uhrzeit und Erinnerung der Aufgabe hängen zusammen
+  const gate = () => $('#tf-time').value && $('#tf-day').value;
+  if (e.target.id === 'tf-time' && $('#tf-time').value && !$('#tf-day').value) $('#tf-day').value = todayKey();   // Uhrzeit ohne Tag: heute
+  if (['tf-time', 'tf-day', 'tf-before', 'tf-before-n', 'tf-before-u'].includes(e.target.id)) reminderInput('tf-', e, todoForm, gate);
+  if (e.target.id === 'tf-day' || e.target.id === 'tf-time') $('#tf-list-field').hidden = !!$('#tf-day').value;   // mit Tag ist „Bereich“ überflüssig
+  syncTodoDraft();
 }
 function addSubRow() {
   syncTodoDraft();
@@ -538,15 +595,23 @@ function submitTodo() {
     $('#tf-text').setAttribute('aria-invalid', 'true'); $('#tf-text').focus();
     return;
   }
+  if (todoForm.time && todoForm.day && todoForm.custom && (todoForm.before === null || todoForm.before > MAX_BEFORE)) {   // "Eigene Zeit" ungültig
+    const er = $('#tf-before-err');
+    er.textContent = todoForm.before === null ? 'Bitte gib eine Zahl ab 1 ein.' : 'Höchstens 14 Tage vorher möglich.'; er.hidden = false;
+    $('#tf-before-n').setAttribute('aria-invalid', 'true'); $('#tf-before-n').focus();
+    return;
+  }
   const subs = todoForm.subs.map((s) => ({ id: s.id, text: s.text.trim().slice(0, 200), done: !!s.done })).filter((s) => s.text);
+  const day = todoForm.day || '', time = todoForm.time || '', before = time && day ? todoForm.before : null;
+  const list = day ? (day === todayKey() ? 'today' : 'later') : todoForm.list;
   const wasEdit = !!editingTodoId;
   if (wasEdit) {
     const t = findTodo(editingTodoId);
-    Object.assign(t, { text, desc, emoji: todoForm.emoji, subs, list: todoForm.list });
+    Object.assign(t, { text, desc, emoji: todoForm.emoji, subs, list, day, time, before });
     touchTodo(t);
   } else {
     const now = Date.now();
-    const t = { id: 't' + now.toString(36) + Math.random().toString(36).slice(2, 5), text, desc, emoji: todoForm.emoji, subs, list: todoForm.list, done: false, deleted: false, created: now, updated: now };
+    const t = { id: 't' + now.toString(36) + Math.random().toString(36).slice(2, 5), text, desc, emoji: todoForm.emoji, subs, list, day, time, before, done: false, deleted: false, created: now, updated: now };
     state.todos.push(t);
     touchTodo(t);
   }
@@ -556,18 +621,32 @@ function submitTodo() {
   location.hash = '#todo';
 }
 function toggleTodo(id) {
+  flushFx();
   const t = findTodo(id);
   if (!t) return;
+  const row = document.querySelector(`.todo[data-peek="todo:${id}"]`);
   t.done = !t.done;
-  touchTodo(t); render();
+  touchTodo(t);
+  if (t.done) renderAfter(row); else render();
   announce(`${t.text}: ${t.done ? 'erledigt' : 'wieder offen'}`);
 }
-function moveTodo(id) {                                      // Heute ⇄ Später
+function moveTodo(id) {                                      // Heute ⇄ Später (der Tag fällt weg)
   const t = findTodo(id);
   if (!t || t.done) return;
-  t.list = t.list === 'today' ? 'later' : 'today';
+  const prev = { list: t.list, day: t.day };
+  t.list = todoSection(t) === 'today' ? 'later' : 'today';
+  t.day = t.list === 'today' && t.time ? todayKey() : '';
   touchTodo(t); render();
-  toast(`„${t.text}“ nach ${t.list === 'today' ? 'Heute' : 'Später'} verschoben`, undefined, { label: 'Rückgängig', run: () => moveTodo(id) });
+  toast(`„${t.text}“ nach ${t.list === 'today' ? 'Heute' : 'Später'} verschoben`, undefined, { label: 'Rückgängig', run: () => { Object.assign(t, prev); touchTodo(t); render(); } });
+}
+function postponeTodo(id) {                                  // Wochenansicht: einen Tag weiter
+  const t = findTodo(id);
+  if (!t || t.done) return;
+  const prev = { list: t.list, day: t.day };
+  t.day = key(addDays(parse(todoDayEff(t) || todayKey()), 1));
+  t.list = t.day === todayKey() ? 'today' : 'later';
+  touchTodo(t); render();
+  toast(`„${t.text}“ auf ${fmt({ weekday: 'long', day: 'numeric', month: 'long' }).format(parse(t.day))} verschoben`, undefined, { label: 'Rückgängig', run: () => { Object.assign(t, prev); touchTodo(t); render(); } });
 }
 function removeTodo(id, rerender = true) {
   const t = findTodo(id);
@@ -609,6 +688,7 @@ const tabOf = () => (['calendar', 'report', 'habits'].includes(view) ? 'overview
 
 const VIEWS = { today: todayHTML, overview: overviewHTML, calendar: calendarHTML, report: reportHTML, form: formHTML, habits: habitsHTML, todo: todoPageHTML, todoform: todoFormHTML, settings: settingsHTML };
 function render(fresh) {
+  if (fxTimer) { clearTimeout(fxTimer); fxTimer = null; }
   if (!fresh && view === 'form') syncDraft();
   if (!fresh && view === 'todoform') syncTodoDraft();               // getippten Text vor dem Neuzeichnen sichern
   const fid = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.fid;
@@ -622,12 +702,17 @@ function render(fresh) {
   if (view === 'today' || view === 'report') animateBar();
   if (view === 'form' || view === 'todoform') loadEmojis().catch(() => {});   // Emoji-Liste im Hintergrund holen (Suche und Namenserkennung)
   replayPress();                                              // das neu gezeichnete Element federt nach, auf das gerade getippt wurde
+  applyPendingFx();
+  if (view === 'todo' && todoMode === 'week' && addingDay) {  // Eingabefeld in der Woche bleibt offen und fokussiert (für die nächste Aufgabe)
+    const inp = $('#wk-add-input');
+    if (inp && document.activeElement !== inp) { inp.focus({ preventScroll: false }); inp.setSelectionRange(inp.value.length, inp.value.length); }
+  }
 }
 
 // Kompakte Tagesübersicht. Aufbau ist immer gleich (Prozent, Unterzeile, Serie, Balken), damit nichts springt.
-function heroHTML(pct, sub, streakN) {
+function heroHTML(pct, sub, streakN, burn) {
   const streakHTML = streakN === null ? '' :
-    `<div class="hero-streak ${streakN ? '' : 'off'}" role="img" aria-label="Serie: ${streakN} ${streakN === 1 ? 'Tag' : 'Tage'} in Folge"><span class="fire" aria-hidden="true">🔥</span><strong aria-hidden="true">${streakN}</strong></div>`;
+    `<div class="hero-streak ${streakN ? '' : 'off'} ${burn ? 'burn' : ''}" role="img" aria-label="Serie: ${streakN} ${streakN === 1 ? 'Tag' : 'Tage'} in Folge"><span class="fire" aria-hidden="true">🔥</span><strong aria-hidden="true">${streakN}</strong></div>`;
   return `<section class="hero" aria-label="Tagesübersicht">
     <div class="hero-main"><div class="hero-pct">${pct === null ? '–' : `${pct}<span>%</span>`}</div><div class="hero-sub">${sub}</div></div>
     ${streakHTML}
@@ -667,7 +752,10 @@ function todayHTML() {
 
   const backBtn = isToday ? '' : `<button class="btn block" data-action="go-today" style="margin-bottom:16px">Zurück zu heute</button>`;
   const sub = cs.length ? `${doneCount} von ${cs.length} erledigt` : hs.length ? 'Alles übersprungen' : 'Nichts geplant';
-  const hero = heroHTML(pct, sub, streak());
+  const streakN = streak();
+  const burn = lastStreak !== null && streakN > lastStreak;     // Serie ist gewachsen: Flamme brennt kurz
+  lastStreak = streakN;
+  const hero = heroHTML(pct, sub, streakN, burn);
 
   const open = [], skipped = [], done = [];
   for (const h of hs) { if (skipOf(k, h.id)) skipped.push(h); else if (count(k, h.id) >= h.target) done.push(h); else open.push(h); }
@@ -807,12 +895,9 @@ function reportHTML() {
 
 /* ---------- Neu / Bearbeiten (ganze Seite statt Dialog) ---------- */
 function newDraft(h) {
-  const d = h ? { name: h.name, desc: h.desc || '', emoji: h.emoji || '', emojiManual: true, target: h.target, days: [...h.days], time: h.time || '', before: h.time ? h.before : null }
-              : { name: '', desc: '', emoji: '', emojiManual: false, target: 1, days: [...WEEK], time: '', before: null };
-  d.custom = d.before !== null && !PRESETS.includes(d.before);   // Wert außerhalb der Auswahl → "Eigene Zeit"
-  const cp = d.custom ? customParts(d.before) : { n: 1, u: 1440 };
-  d.cn = cp.n; d.cu = cp.u;
-  return d;
+  const d = h ? { name: h.name, desc: h.desc || '', emoji: h.emoji || '', emojiManual: true, target: h.target, days: [...h.days] }
+              : { name: '', desc: '', emoji: '', emojiManual: false, target: 1, days: [...WEEK] };
+  return Object.assign(d, reminderDraft(h ? h.time : '', h ? h.before : null));
 }
 function syncDraft() {                                       // DOM → Entwurf
   if (!draft || !$('#habit-form')) return;
@@ -822,16 +907,7 @@ function syncDraft() {                                       // DOM → Entwurf
   draft.emojiManual = $('.symbol-btn[data-target="f-emoji"]').dataset.manual === '1';
   draft.target = parseInt($('#f-target').value, 10) || 1;
   draft.days = [...document.querySelectorAll('#habit-form input[name="day"]:checked')].map((i) => Number(i.value));
-  draft.time = $('#f-time').value;
-  const sel = $('#f-before').value;
-  draft.custom = sel === 'custom';
-  const nEl = $('#f-before-n');
-  draft.cu = Number($('#f-before-u').value) || 1;
-  draft.cn = nEl.value;                                      // bleibt wie getippt (auch leer), damit Neuzeichnen nichts verschluckt
-  const n = parseInt(nEl.value, 10);
-  if (!draft.time) draft.before = null;
-  else if (draft.custom) draft.before = n >= 1 ? n * draft.cu : null;   // Grenze (14 Tage) wird erst beim Speichern geprüft, nicht beim Tippen
-  else draft.before = sel === '' ? null : Number(sel);
+  readReminder('f-', draft);
 }
 function formHTML() {
   const h = editingId ? state.habits.find((x) => x.id === editingId) : null;
@@ -856,24 +932,65 @@ function formHTML() {
         <p class="hint" id="f-target-hint">Zum Beispiel 2 für zwei Bananen.</p></div>
       <fieldset class="field"><legend>Wochentage</legend>
         <div class="chips">${WEEK.map((wd, i) => `<label><input type="checkbox" name="day" value="${wd}" aria-label="${WD_LONG[i]}" ${d.days.includes(wd) ? 'checked' : ''}><span aria-hidden="true">${WD_SHORT[i]}</span></label>`).join('')}</div></fieldset>
-      <div class="field"><label for="f-time">Uhrzeit (optional)</label>
-        <div class="row"><input id="f-time" type="time" value="${esc(d.time)}"><button type="button" class="btn ghost" data-action="clear-time">Entfernen</button></div>
-        <p class="hint">Wann machst du das normalerweise?</p></div>
-      <div class="field"><label for="f-before">Erinnerung</label>
-        <select id="f-before" ${d.time ? '' : 'disabled'} aria-describedby="f-before-hint">${beforeOptions(d)}</select>
-        <div id="f-custom" class="custom-before" ${d.time && d.custom ? '' : 'hidden'}>
-          <div class="row">
-            <input id="f-before-n" class="num" type="number" inputmode="numeric" min="1" max="${maxFor(d.cu)}" step="1" value="${esc(d.cn)}" aria-label="Wie lange vorher erinnern: Zahl">
-            <select id="f-before-u" aria-label="Wie lange vorher erinnern: Einheit">${[[1, 'Minuten'], [60, 'Stunden'], [1440, 'Tage']].map(([v, t]) => `<option value="${v}" ${v === d.cu ? 'selected' : ''}>${t}</option>`).join('')}</select>
-            <span class="muted nowrap">vorher</span></div>
-          <p class="error" id="f-before-err" role="alert" hidden></p>
-        </div>
-        <p class="hint" id="f-before-hint">Braucht eine Uhrzeit. Bis zu 14 Tage vorher möglich.</p></div>
+      ${reminderFieldsHTML('f-', d, 'Wann machst du das normalerweise?', 'Braucht eine Uhrzeit. Bis zu 14 Tage vorher möglich.')}
       <div class="actions"><button type="submit" class="btn primary">${h ? 'Speichern' : 'Gewohnheit anlegen'}</button></div>
       ${h ? `<button type="button" class="btn danger ${deleteArmed ? 'armed' : ''}" data-action="delete-habit" data-fid="del">${deleteArmed ? 'Wirklich löschen?' : 'Löschen'}</button>` : ''}
     </form></div>`;
 }
 
+/* ---------- Erinnerungs-Felder (Uhrzeit + Vorlauf), gemeinsam für Gewohnheiten (p = 'f-') und Aufgaben (p = 'tf-') ---------- */
+function reminderDraft(time, before) {                       // Entwurfsfelder zu Uhrzeit und Vorlauf
+  const d = { time: time || '', before: time ? before : null };
+  d.custom = d.before !== null && !PRESETS.includes(d.before);   // Wert außerhalb der Auswahl → "Eigene Zeit"
+  const cp = d.custom ? customParts(d.before) : { n: 1, u: 1440 };
+  d.cn = cp.n; d.cu = cp.u;
+  return d;
+}
+function reminderFieldsHTML(p, d, timeHint, beforeHint, needDay) {   // needDay: die Erinnerung braucht zusätzlich einen Tag (Aufgaben)
+  const can = d.time && (!needDay || d.day);
+  return `<div class="field"><label for="${p}time">Uhrzeit (optional)</label>
+        <div class="row"><input id="${p}time" type="time" value="${esc(d.time)}"><button type="button" class="btn ghost" data-action="clear-time" data-p="${p}">Entfernen</button></div>
+        <p class="hint">${timeHint}</p></div>
+      <div class="field"><label for="${p}before">Erinnerung</label>
+        <select id="${p}before" ${can ? '' : 'disabled'} aria-describedby="${p}before-hint">${beforeOptions(d)}</select>
+        <div id="${p}custom" class="custom-before" ${can && d.custom ? '' : 'hidden'}>
+          <div class="row">
+            <input id="${p}before-n" class="num" type="number" inputmode="numeric" min="1" max="${maxFor(d.cu)}" step="1" value="${esc(d.cn)}" aria-label="Wie lange vorher erinnern: Zahl">
+            <select id="${p}before-u" aria-label="Wie lange vorher erinnern: Einheit">${[[1, 'Minuten'], [60, 'Stunden'], [1440, 'Tage']].map(([v, t]) => `<option value="${v}" ${v === d.cu ? 'selected' : ''}>${t}</option>`).join('')}</select>
+            <span class="muted nowrap">vorher</span></div>
+          <p class="error" id="${p}before-err" role="alert" hidden></p>
+        </div>
+        <p class="hint" id="${p}before-hint">${beforeHint}</p></div>`;
+}
+function readReminder(p, d) {                                // DOM → Entwurf
+  d.time = $(`#${p}time`).value;
+  const sel = $(`#${p}before`).value;
+  d.custom = sel === 'custom';
+  const nEl = $(`#${p}before-n`);
+  d.cu = Number($(`#${p}before-u`).value) || 1;
+  d.cn = nEl.value;                                          // bleibt wie getippt (auch leer), damit Neuzeichnen nichts verschluckt
+  const n = parseInt(nEl.value, 10);
+  if (!d.time) d.before = null;
+  else if (d.custom) d.before = n >= 1 ? n * d.cu : null;   // Grenze (14 Tage) wird erst beim Speichern geprüft, nicht beim Tippen
+  else d.before = sel === '' ? null : Number(sel);
+}
+function reminderInput(p, e, d, gate) {                      // Uhrzeit, Auswahl und „Eigene Zeit“ reagieren aufeinander; gate() = Erinnerung möglich?
+  const id = e.target.id, sel = $(`#${p}before`), custom = $(`#${p}custom`), time = $(`#${p}time`);
+  if (id === `${p}time` || id === `${p}day`) {
+    const had = d && d.time;
+    if (id === `${p}time` && time.value && !had && sel.value === '') sel.value = '0';   // erste Uhrzeit → gleich "Zur Uhrzeit" vorwählen
+    if (!gate()) sel.value = '';
+    sel.disabled = !gate();
+  }
+  if (id === `${p}before` && sel.value === 'custom') {       // "Eigene Zeit": mit dem bisherigen Wert vorbelegen
+    const cp = d && d.before != null ? customParts(d.before) : { n: (d && d.cn) || 1, u: (d && d.cu) || 1440 };
+    $(`#${p}before-n`).value = cp.n; $(`#${p}before-u`).value = cp.u;
+  }
+  if (id === `${p}before-u`) $(`#${p}before-n`).max = maxFor(Number(e.target.value));
+  if (id === `${p}before-n` || id === `${p}before-u`) { const er = $(`#${p}before-err`); er.hidden = true; $(`#${p}before-n`).removeAttribute('aria-invalid'); }
+  custom.hidden = !(gate() && sel.value === 'custom');
+  if (id === `${p}before` && !custom.hidden) custom.scrollIntoView({ block: 'nearest' });   // Feld nicht unter der festen Speichern-Leiste lassen
+}
 function beforeOptions(d) {
   const cur = d.custom ? 'custom' : d.before;
   return [...BEFORE_OPTS, ['custom', 'Eigene Zeit …']]
@@ -938,7 +1055,7 @@ function weekHTML() {
   const head = `<div class="week-head"><h2>Letzte 7 Tage</h2><button type="button" class="btn ghost small" data-action="week-pick">Auswählen</button></div>`;
   if (!hs.length) return `<section class="week" aria-label="Letzte 7 Tage">${head}<p class="hint">${state.habits.some((h) => !h.archived) ? 'Wähle bis zu 10 Gewohnheiten aus, die hier erscheinen sollen.' : 'Sobald du Gewohnheiten angelegt hast, siehst du hier die letzten 7 Tage.'}</p></section>`;
   const ths = days.map((d) => { const k = key(d); return `<th scope="col" class="${k === tk ? 'today' : ''}"><span class="wd">${WD_SHORT[(d.getDay() + 6) % 7]}</span><span class="dn">${d.getDate()}</span></th>`; }).join('');
-  const rows = hs.map((h) => `<tr><th scope="row" class="wname"><span>${emo(h.emoji)}${esc(h.name)}</span></th>${days.map((d) => {
+  const rows = hs.map((h) => `<tr><th scope="row" class="wname"><span class="wn">${emo(h.emoji)}<span class="wt">${esc(h.name)}</span></span></th>${days.map((d) => {
     const k = key(d), [c, t] = weekCell(h, k, tk);
     return `<td class="wc ${c} ${k === tk ? 'today' : ''}"><span class="dot" aria-hidden="true">${c === 'ok' ? icon('check') : c === 'na' ? icon('x') : ''}</span><span class="sr">${t}</span></td>`;
   }).join('')}</tr>`).join('');
@@ -1004,9 +1121,92 @@ function habitsHTML() {
 }
 
 /* ---------- To-Do-Seite (eigener Reiter) ---------- */
+/* ---------- To-Do „Woche“: Wochenstreifen, einklappbare Tage, Aufgaben direkt im Tag anlegen ---------- */
+let todoMode = lsGet('habit-tracker-todo-mode') === 'week' ? 'week' : 'simple';
+let weekOffset = 0, weekAnim = null, addingDay = null, addText = '';
+const weekOpen = new Set(), weekInit = new Set();
+function weekKeys(off) {                                     // Montag bis Sonntag der Woche (off = Wochen ab heute)
+  const t = new Date(), dow = (t.getDay() + 6) % 7;
+  return Array.from({ length: 7 }, (_, i) => key(addDays(t, -dow + 7 * off + i)));
+}
+function isoWeek(d) {                                        // Kalenderwoche nach ISO 8601
+  const x = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  x.setUTCDate(x.getUTCDate() + 4 - (x.getUTCDay() || 7));
+  return Math.ceil(((x - Date.UTC(x.getUTCFullYear(), 0, 1)) / 864e5 + 1) / 7);
+}
+function tasksOn(k) {                                        // offene (eigene Reihenfolge) vor erledigten Aufgaben
+  const live = state.todos.filter((t) => !t.deleted && (t.done ? t.day === k : todoDayEff(t) === k));
+  return [...live.filter((t) => !t.done).sort(byPos), ...live.filter((t) => t.done).sort((a, b) => b.updated - a.updated)];
+}
+const laterTasks = () => state.todos.filter((t) => !t.deleted && !t.done && !todoDayEff(t)).sort(byPos);
+function chipProgress(list) {                                // bis 3 Aufgaben: Punkte (gefüllt = erledigt), darüber: Zahl erledigt/gesamt
+  const n = list.length, done = list.filter((t) => t.done).length;
+  if (!n) return '<span class="wk-prog"></span>';
+  if (n > 3) return `<span class="wk-prog num" aria-hidden="true">${done}/${n}</span>`;
+  return `<span class="wk-prog" aria-hidden="true">${[...Array(done).fill('on'), ...Array(n - done).fill('')].map((c) => `<i class="d ${c}"></i>`).join('')}</span>`;
+}
+function dayPillText(list) {
+  const open = list.filter((t) => !t.done).length;
+  return !list.length ? 'leer' : open ? `${open} offen` : 'erledigt';
+}
+function weekAddHTML(k, label) {
+  if (addingDay !== k) return `<button type="button" class="wk-add" data-action="wk-add" data-day="${k}">${icon('plus')}<span>Aufgabe hinzufügen</span></button>`;
+  return `<form class="wk-add-form" data-day="${k}"><input id="wk-add-input" data-fid="wk-add" type="text" maxlength="200" autocomplete="off" enterkeyhint="done" placeholder="Neue Aufgabe" aria-label="Neue Aufgabe für ${esc(label)}" value="${esc(addText)}"><button type="submit" class="btn primary wk-add-btn" aria-label="Hinzufügen">${icon('plus')}</button></form>`;
+}
+function weekCardHTML(k, title, dateTxt, list, open, today, drag) {
+  const open2 = list.filter((t) => !t.done).length;
+  return `<section class="card day-card ${today ? 'today' : ''}" id="day-${k}" aria-label="${esc(title)}">
+    <button type="button" class="dh" data-action="wk-toggle" data-day="${k}" aria-expanded="${open}" aria-controls="daybody-${k}">
+      <span class="nm">${esc(title)}</span><span class="dt">${esc(dateTxt)}</span><span class="pill ${list.length && !open2 ? 'g' : ''}">${dayPillText(list)}</span>${icon('right', 'chev')}</button>
+    <div class="day-wrap ${open ? 'open' : ''}"><div class="day-in" id="daybody-${k}">
+      ${list.length ? `<ul class="list">${list.map((t) => todoRow(t, drag && open2 > 1, true)).join('')}</ul>` : addingDay === k ? '' : '<p class="todo-empty">Noch nichts geplant.</p>'}
+      ${weekAddHTML(k, title)}</div></div></section>`;
+}
+function todoWeekHTML() {
+  const days = weekKeys(weekOffset), today = todayKey();
+  if (!weekInit.has(days[0])) {                              // erste Ansicht dieser Woche: heute (oder der erste Tag mit offenen Aufgaben) aufgeklappt
+    weekInit.add(days[0]);
+    weekOpen.add(days.includes(today) ? today : (days.find((k) => tasksOn(k).some((t) => !t.done)) || days[0]));
+  }
+  const per = days.map((k) => ({ k, list: tasksOn(k) }));
+  const first = parse(days[0]), last = parse(days[6]);
+  const range = `${fmt({ day: 'numeric', month: first.getMonth() === last.getMonth() ? undefined : 'short' }).format(first)} bis ${fmt({ day: 'numeric', month: 'short' }).format(last)}`;
+  const anim = weekAnim; weekAnim = null;
+  const later = laterTasks();
+  return `<div class="wk-head">
+      <button type="button" class="icon-btn" data-action="wk-prev" aria-label="Vorherige Woche">${icon('left')}</button>
+      <div class="wk-title"><b>KW ${isoWeek(first)}</b><span>${esc(range)}</span></div>
+      ${weekOffset !== 0 ? '<button type="button" class="btn ghost small" data-action="wk-today">Heute</button>' : ''}
+      <button type="button" class="icon-btn" data-action="wk-next" aria-label="Nächste Woche">${icon('right')}</button></div>
+    <div class="wk-body ${anim ? 'anim-' + anim : ''}">
+      <div class="wk-strip" role="group" aria-label="Wochentage, nach links oder rechts wischen wechselt die Woche">${per.map(({ k, list }, i) => {
+        const done = list.filter((t) => t.done).length;
+        return `<button type="button" class="wk-chip ${k === today ? 'today' : ''}" data-action="wk-jump" data-day="${k}" aria-label="${WD_LONG[i]} ${esc(fmt({ day: 'numeric', month: 'long' }).format(parse(k)))}: ${list.length ? `${done} von ${list.length} erledigt` : 'nichts geplant'}"><small>${WD_SHORT[i]}</small><b>${parse(k).getDate()}</b>${chipProgress(list)}</button>`;
+      }).join('')}</div>
+      ${per.map(({ k, list }, i) => weekCardHTML(k, k === today ? `Heute, ${WD_LONG[i]}` : WD_LONG[i], fmt({ day: 'numeric', month: 'short' }).format(parse(k)), list, weekOpen.has(k), k === today, true)).join('')}
+      ${weekCardHTML('later', 'Später', 'ohne Tag', later, weekOpen.has('later'), false, true)}
+      <p class="hint swipe-hint">Nach rechts wischen schiebt auf morgen, nach links löscht. Auf dem Wochenstreifen nach links oder rechts wischen wechselt die Woche.</p>
+    </div>`;
+}
+function weekNav(dir) {
+  weekOffset += dir; weekAnim = dir > 0 ? 'next' : 'prev'; addingDay = null; addText = '';
+  render();
+}
+function addWeekTask(k) {
+  const text = ($('#wk-add-input').value || '').trim().slice(0, 200);
+  if (!text) { addingDay = null; addText = ''; render(); return; }
+  const now = Date.now(), day = k === 'later' ? '' : k;
+  const t = { id: 't' + now.toString(36) + Math.random().toString(36).slice(2, 5), text, desc: '', emoji: autoEmojiFor(text), list: !day || day !== todayKey() ? 'later' : 'today', day, time: '', before: null, subs: [], done: false, deleted: false, created: now, updated: now };
+  state.todos.push(t);
+  touchTodo(t);
+  addText = ''; addingDay = k; weekOpen.add(k);
+  render();
+  announce(`Aufgabe hinzugefügt: ${text}`);
+}
 function todoPageHTML() {
   const open = state.todos.filter((t) => !t.deleted && !t.done).length;
-  return `<div class="view-in"><header class="page-head left"><div class="titles"><h1>To-Do</h1><p>${open} offene ${open === 1 ? 'Aufgabe' : 'Aufgaben'}</p></div></header>${todoHTML()}</div>`;
+  const seg = `<nav class="seg" aria-label="Ansicht"><a href="#todo-einfach" ${todoMode === 'simple' ? 'aria-current="page"' : ''}>Einfach</a><a href="#todo-woche" ${todoMode === 'week' ? 'aria-current="page"' : ''}>Woche</a></nav>`;
+  return `<div class="view-in"><header class="page-head left"><div class="titles"><h1>To-Do</h1><p>${open} offene ${open === 1 ? 'Aufgabe' : 'Aufgaben'}</p></div></header>${seg}${todoMode === 'week' ? todoWeekHTML() : todoHTML()}</div>`;
 }
 
 /* ---------- To-Do-Ansicht: Heute, Später, Erledigt (eingeklappt) ---------- */
@@ -1020,8 +1220,8 @@ const todoMatches = (t, q) => !q || t.text.toLowerCase().includes(q) || t.subs.s
 function todoResultsHTML() {
   const q = todoQuery.trim().toLowerCase();
   const all = state.todos.filter((t) => !t.deleted && todoMatches(t, q)).sort(byPos);   // eigene Reihenfolge, neue Aufgaben ganz unten
-  const today = all.filter((t) => !t.done && t.list === 'today');
-  const later = all.filter((t) => !t.done && t.list === 'later');
+  const today = all.filter((t) => todoSection(t) === 'today');
+  const later = all.filter((t) => todoSection(t) === 'later');
   const done = all.filter((t) => t.done).sort((a, b) => b.updated - a.updated);
   const section = (id, title, items, empty) => `<section class="group" aria-labelledby="${id}"><h2 id="${id}">${title} <span class="count-badge">${items.length}</span></h2>
     ${items.length ? `<ul class="list">${items.map((t) => todoRow(t, items.length > 1)).join('')}</ul>` : `<p class="todo-empty">${empty}</p>`}</section>`;
@@ -1032,7 +1232,7 @@ function todoResultsHTML() {
     ${foldHTML('tdone', 'Erledigt', done, todoRow)}`;
 }
 const openSubs = new Set();                                  // Aufgaben mit aufgeklappten Unterpunkten (Standard: eingeklappt, gilt nur bis zum Neuladen)
-function todoRow(t, canDrag) {
+function todoRow(t, canDrag, week) {
   const subs = t.subs || [];
   const nDone = subs.filter((x) => x.done).length;
   const q = todoQuery.trim().toLowerCase();
@@ -1041,19 +1241,19 @@ function todoRow(t, canDrag) {
   const inner = `<div class="todo ${t.done ? 'done' : ''}" data-peek="todo:${t.id}">
     <div class="todo-main">
       <button type="button" class="todo-check" data-action="todo-toggle" data-id="${t.id}" data-fid="tc-${t.id}" aria-pressed="${t.done}" aria-label="${esc(t.text)}: ${t.done ? 'wieder öffnen' : 'als erledigt markieren'}"><span class="check" aria-hidden="true">${icon('check')}</span></button>
-      <button type="button" class="todo-text" data-action="todo-edit" data-id="${t.id}" data-fid="te-${t.id}">${emo(t.emoji)}${esc(t.text)}${noteMark(t.desc)}</button>
+      <button type="button" class="todo-text" data-action="todo-edit" data-id="${t.id}" data-fid="te-${t.id}">${emo(t.emoji)}${esc(t.text)}${noteMark(t.desc)}${todoWhenHTML(t, week)}</button>
       ${subs.length ? `<button type="button" class="todo-progress ${nDone === subs.length ? 'all' : ''}" data-action="subs-toggle" data-id="${t.id}" data-fid="tp-${t.id}" aria-expanded="${isOpen}" aria-controls="subs-${t.id}" aria-label="Unterpunkte, ${nDone} von ${subs.length} erledigt"><span aria-hidden="true">${nDone}/${subs.length}</span>${icon('right', 'chev')}</button>` : ''}
       ${drag ? dragHandleHTML('todo', t.id, t.text) : ''}
     </div>
     ${subs.length ? `<div class="subs-wrap ${isOpen ? 'open' : ''}"><ul class="subs" id="subs-${t.id}">${subs.map((x) => `<li class="sub ${x.done ? 'done' : ''}">
       <button type="button" class="sub-check" data-action="sub-toggle" data-id="${t.id}" data-sub="${x.id}" data-fid="sc-${x.id}" aria-pressed="${x.done}" aria-label="${esc(x.text)}: ${x.done ? 'wieder öffnen' : 'als erledigt markieren'}"><span class="check small" aria-hidden="true">${icon('check')}</span></button>
       <span class="sub-text">${esc(x.text)}</span></li>`).join('')}</ul></div>` : ''}</div>`;
-  const target = t.list === 'today' ? 'Später' : 'Heute';
-  return `<li class="swipe" data-kind="todo" data-id="${t.id}" data-right="${t.done ? 0 : 1}" ${drag ? `data-ord="todo:${t.id}"` : ''}>
-    ${t.done ? '' : `<div class="swipe-bg skip" aria-hidden="true">${icon(t.list === 'today' ? 'clock' : 'calendar')}</div>`}
+  const target = week ? 'morgen' : t.list === 'today' ? 'nach Später' : 'nach Heute';
+  return `<li class="swipe" data-kind="todo" data-id="${t.id}" data-right="${t.done ? 0 : 1}" ${week ? 'data-week="1"' : ''} ${drag ? `data-ord="todo:${t.id}"` : ''}>
+    ${t.done ? '' : `<div class="swipe-bg skip" aria-hidden="true">${icon(week || t.list !== 'today' ? 'calendar' : 'clock')}</div>`}
     <div class="swipe-bg del" aria-hidden="true">${icon('trash')}</div>
     <div class="swipe-front">${inner}</div>
-    <div class="swipe-alt"><button type="button" class="sr-btn" data-action="peek-open" data-ref="todo:${t.id}">${esc(t.text)} Details anzeigen</button>${t.done ? '' : `<button type="button" class="sr-btn" data-action="todo-move" data-id="${t.id}">${esc(t.text)} nach ${target} verschieben</button>`}<button type="button" class="sr-btn" data-action="todo-del" data-id="${t.id}">${esc(t.text)} löschen</button></div></li>`;
+    <div class="swipe-alt"><button type="button" class="sr-btn" data-action="peek-open" data-ref="todo:${t.id}">${esc(t.text)} Details anzeigen</button>${t.done ? '' : `<button type="button" class="sr-btn" data-action="todo-move" data-id="${t.id}">${esc(t.text)} ${target === 'morgen' ? 'auf morgen' : target} verschieben</button>`}<button type="button" class="sr-btn" data-action="todo-del" data-id="${t.id}">${esc(t.text)} löschen</button></div></li>`;
 }
 
 /* ---------- Seite: Neue Aufgabe / Aufgabe bearbeiten ---------- */
@@ -1081,7 +1281,11 @@ function todoFormHTML() {
         ${d.subs.length ? `<ul class="sub-edit-list">${d.subs.map((x, i) => `<li class="sub-edit"><input type="text" class="sub-input" maxlength="200" data-sid="${x.id}" value="${esc(x.text)}" placeholder="Unterpunkt" aria-label="Unterpunkt ${i + 1}" enterkeyhint="next" autocomplete="off">
           <button type="button" class="icon-btn" data-action="sub-del" data-sid="${x.id}" aria-label="Unterpunkt ${i + 1} entfernen">${icon('x')}</button></li>`).join('')}</ul>` : ''}
         <button type="button" class="btn ghost add-sub" data-action="sub-add">${icon('plus')} Unterpunkt hinzufügen</button></fieldset>
-      <fieldset class="field"><legend>Bereich</legend>
+      <div class="field"><label for="tf-day">Tag (optional)</label>
+        <div class="row"><input id="tf-day" type="date" value="${esc(d.day)}"><button type="button" class="btn ghost" data-action="clear-day">Entfernen</button></div>
+        <p class="hint">Der Tag bestimmt, wo die Aufgabe in der Wochenansicht steht.</p></div>
+      ${reminderFieldsHTML('tf-', d, 'Wann soll es erledigt sein?', 'Braucht Tag und Uhrzeit. Bis zu 14 Tage vorher möglich.', true)}
+      <fieldset class="field" id="tf-list-field" ${d.day ? 'hidden' : ''}><legend>Bereich</legend>
         <div class="chips two">${[['today', 'Heute'], ['later', 'Später']].map(([v, l]) => `<label><input type="radio" name="tf-list" value="${v}" ${d.list === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></fieldset>
       <label class="check-row"><input type="checkbox" id="tf-preset" ${d.savePreset ? 'checked' : ''}><span>Als Preset speichern</span></label>
       <div class="actions"><button type="submit" class="btn primary">${t ? 'Speichern' : 'Hinzufügen'}</button></div>
@@ -1165,6 +1369,7 @@ function loginError(err) {
 $('#view').addEventListener('submit', async (e) => {
   if (e.target.id === 'habit-form') { e.preventDefault(); submitHabit(); return; }
   if (e.target.id === 'todo-edit-form') { e.preventDefault(); submitTodo(); return; }
+  if (e.target.classList && e.target.classList.contains('wk-add-form')) { e.preventDefault(); addWeekTask(e.target.dataset.day); return; }
   if (e.target.id !== 'login-form') return;
   e.preventDefault();
   const email = $('#l-email').value.trim();
@@ -1223,7 +1428,7 @@ function setLocalSkip(day, id, reason) {
   if (!Object.keys(d).length) delete state.skip[day];
 }
 function todoFromCloud(r) {
-  return { id: r.id, text: r.text, list: r.list, done: !!r.done, deleted: !!r.deleted, emoji: r.emoji || '', desc: r.description || '', pos: r.sort_pos ?? undefined, subs: Array.isArray(r.subs) ? r.subs : [], created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
+  return { id: r.id, text: r.text, list: r.list, done: !!r.done, deleted: !!r.deleted, emoji: r.emoji || '', desc: r.description || '', pos: r.sort_pos ?? undefined, day: r.due_day || '', time: r.at_time ? String(r.at_time).slice(0, 5) : '', before: r.remind_before ?? null, subs: Array.isArray(r.subs) ? r.subs : [], created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
 }
 function presetFromCloud(r) {
   return { id: r.id, name: r.name, emoji: r.emoji || '', subs: Array.isArray(r.subs) ? r.subs : [], deleted: !!r.deleted, created: Date.parse(r.created_at), updated: Date.parse(r.updated_at) };
@@ -1295,7 +1500,7 @@ async function pushDirty() {
   const ls = Object.keys(state.dirty.logs).map((k) => { const [day, id] = splitKey(k); return { k, day, id, ts: state.ts[k] || 0, count: count(day, id), skip: skipOf(day, id) }; });
   await upsertChunks('habits', hs.map((h) => ({ user_id: uid, id: h.id, name: h.name, emoji: h.emoji || null, description: h.desc || null, sort_pos: h.pos ?? null, target: h.target, days: h.days, at_time: h.time || null, remind_before: h.time && h.before != null ? h.before : null, remind: null, created: h.created, archived: h.archived || null, updated_at: msToIso(h.updated) })), 'user_id,id');
   const ts = state.todos.filter((t) => state.dirty.todos[t.id]);
-  await upsertChunks('todos', ts.map((t) => ({ user_id: uid, id: t.id, text: t.text, emoji: t.emoji || null, description: t.desc || null, sort_pos: t.pos ?? null, list: t.list, done: t.done, deleted: t.deleted, subs: t.subs || [], created_at: msToIso(t.created), updated_at: msToIso(t.updated) })), 'user_id,id');
+  await upsertChunks('todos', ts.map((t) => ({ user_id: uid, id: t.id, text: t.text, emoji: t.emoji || null, description: t.desc || null, sort_pos: t.pos ?? null, due_day: t.day || null, at_time: t.time || null, remind_before: t.day && t.time && t.before != null ? t.before : null, list: t.list, done: t.done, deleted: t.deleted, subs: t.subs || [], created_at: msToIso(t.created), updated_at: msToIso(t.updated) })), 'user_id,id');
   const ps = state.presets.filter((p) => state.dirty.presets[p.id]);
   await upsertChunks('todo_presets', ps.map((p) => ({ user_id: uid, id: p.id, name: p.name, emoji: p.emoji || null, subs: p.subs, deleted: p.deleted, created_at: msToIso(p.created), updated_at: msToIso(p.updated) })), 'user_id,id');
   await upsertChunks('logs', ls.map((l) => ({ user_id: uid, day: l.day, habit_id: l.id, count: l.count, skip: l.skip, updated_at: msToIso(l.ts) })), 'user_id,day,habit_id');
@@ -1540,30 +1745,15 @@ function deleteHabit() {
   location.hash = editBack.href;
 }
 function onFormInput(e) {
-  const id = e.target.id;
-  const sel = $('#f-before');
-  const custom = $('#f-custom');
-  if (id === 'f-time') {                                     // Uhrzeit steuert das Erinnerungs-Feld
-    const had = draft && draft.time;
-    if (e.target.value && !had && sel.value === '') sel.value = '0';   // erste Uhrzeit → gleich "Zur Uhrzeit" vorwählen
-    if (!e.target.value) sel.value = '';
-    sel.disabled = !e.target.value;
-  }
-  if (id === 'f-before' && sel.value === 'custom') {          // "Eigene Zeit": mit dem bisherigen Wert vorbelegen
-    const cp = draft && draft.before != null ? customParts(draft.before) : { n: (draft && draft.cn) || 1, u: (draft && draft.cu) || 1440 };
-    $('#f-before-n').value = cp.n; $('#f-before-u').value = cp.u;
-  }
-  if (id === 'f-before-u') $('#f-before-n').max = maxFor(Number(e.target.value));
-  if (id === 'f-before-n' || id === 'f-before-u') { const er = $('#f-before-err'); er.hidden = true; $('#f-before-n').removeAttribute('aria-invalid'); }
-  custom.hidden = !($('#f-time').value && sel.value === 'custom');
-  if (id === 'f-before' && !custom.hidden) custom.scrollIntoView({ block: 'nearest' });   // Feld nicht unter der festen Speichern-Leiste lassen
+  reminderInput('f-', e, draft, () => $('#f-time').value);   // Uhrzeit steuert das Erinnerungs-Feld
   syncDraft();
 }
 $('#view').addEventListener('input', (e) => {
+  if (e.target.id === 'wk-add-input') addText = e.target.value;
   if (e.target.id === 'f-name' || e.target.id === 'tf-text') autoSymbol(e.target);   // bekanntes Wort im Namen → Emoji sofort einsetzen
   if (e.target.id === 'todo-search') { todoQuery = e.target.value; $('#todo-results').innerHTML = todoResultsHTML(); }   // nur die Ergebnisse neu zeichnen, das Feld behält Fokus und Cursor
   if (e.target.closest && e.target.closest('#todo-edit-form')) {
-    syncTodoDraft();
+    todoFormInput(e);
     if (e.target.id === 'tf-text') { $('#tf-err').hidden = true; e.target.removeAttribute('aria-invalid'); }
   }
   if (e.target.closest && e.target.closest('#habit-form')) onFormInput(e);
@@ -1577,7 +1767,14 @@ $('#view').addEventListener('change', (e) => {                 // Einstellungen 
   save(); queuePush();
   toast(state.settings.dailyEnabled ? `Tägliche Erinnerung um ${state.settings.dailyTime} Uhr` : 'Tägliche Erinnerung aus');
 });
-$('#view').addEventListener('keydown', (e) => {              // Enter in einem Unterpunkt legt den nächsten an
+$('#view').addEventListener('focusout', (e) => {             // leeres Eingabefeld der Woche: beim Verlassen wieder zuklappen
+  if (e.target.id !== 'wk-add-input' || e.target.value.trim()) return;
+  if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('.wk-add-form')) return;
+  setTimeout(() => { if (addingDay && !(document.activeElement && document.activeElement.id === 'wk-add-input')) { addingDay = null; addText = ''; render(); } }, 120);
+});
+$('#view').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && e.target.id === 'wk-add-input') { addingDay = null; addText = ''; render(); return; }
+  // Enter in einem Unterpunkt legt den nächsten an
   if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('sub-input')) { e.preventDefault(); addSubRow(); }
 });
 
@@ -1621,7 +1818,7 @@ $('#view').addEventListener('click', (e) => {
     case 'move-menu': openMoveMenu(el.dataset.ref); break;
     case 'peek-open': { const [kd, pid] = el.dataset.ref.split(':'); openPeek(kd, pid, el.closest('li') || el); break; }
     case 'todo-form-del': { const id = editingTodoId; todoForm = null; removeTodo(id, false); location.hash = '#todo'; break; }
-    case 'todo-move': moveTodo(el.dataset.id); break;
+    case 'todo-move': (el.closest('li').dataset.week ? postponeTodo : moveTodo)(el.dataset.id); break;
     case 'todo-del': removeTodo(el.dataset.id); break;
     case 'skip-ask': askSkip(el.dataset.id); break;
     case 'del-ask': requestDelete(el.dataset.id); break;
@@ -1635,7 +1832,25 @@ $('#view').addEventListener('click', (e) => {
     case 'rep-next': location.hash = '#tag/' + key(addDays(parse(reportDate), 1)); break;
     case 'edit-day': viewDate = parse(el.dataset.date); location.hash = '#heute'; break;
     case 'new': location.hash = '#neu'; break;
-    case 'clear-time': $('#f-time').value = ''; onFormInput({ target: $('#f-time') }); break;
+    case 'clear-time': { const p = el.dataset.p || 'f-'; $(`#${p}time`).value = ''; (p === 'tf-' ? todoFormInput : onFormInput)({ target: $(`#${p}time`) }); break; }
+    case 'wk-prev': weekNav(-1); break;
+    case 'wk-next': weekNav(1); break;
+    case 'wk-today': weekAnim = weekOffset > 0 ? 'prev' : 'next'; weekOffset = 0; addingDay = null; addText = ''; render(); break;
+    case 'wk-toggle': {
+      const k = el.dataset.day, open = !weekOpen.has(k);
+      if (open) weekOpen.add(k); else { weekOpen.delete(k); if (addingDay === k) { addingDay = null; addText = ''; render(); break; } }
+      el.setAttribute('aria-expanded', String(open));
+      el.closest('.day-card').querySelector('.day-wrap').classList.toggle('open', open);
+      break;
+    }
+    case 'wk-jump': {
+      weekOpen.add(el.dataset.day); render();
+      const card = document.getElementById('day-' + el.dataset.day);
+      if (card) card.scrollIntoView({ block: 'start', behavior: noMotion() ? 'auto' : 'smooth' });
+      break;
+    }
+    case 'wk-add': addingDay = el.dataset.day; addText = ''; weekOpen.add(el.dataset.day); render(); break;
+    case 'clear-day': $('#tf-day').value = ''; todoFormInput({ target: $('#tf-day') }); break;
     case 'delete-habit': deleteHabit(); break;
     case 'notif': setupPush(true); break;
     case 'check-update': checkForUpdate(); break;
@@ -1683,7 +1898,7 @@ function endSwipe(e, cancelled) {
   if (cancelled || Math.abs(s.dx) < SW_THRESH) { reset(); return; }
   const todo = s.li.dataset.kind === 'todo';
   if (s.dx > 0) {
-    if (todo) { s.front.style.transform = 'translateX(110%)'; setTimeout(() => moveTodo(id), 170); return; }   // Heute ⇄ Später
+    if (todo) { s.front.style.transform = 'translateX(110%)'; setTimeout(() => (s.li.dataset.week ? postponeTodo : moveTodo)(id), 170); return; }   // Heute ⇄ Später, in der Woche: auf morgen
     reset(); askSkip(id); return;
   }
   if (todo) { s.front.style.transform = 'translateX(-110%)'; setTimeout(() => removeTodo(id), 170); return; }
@@ -1714,7 +1929,7 @@ function peekContent(kind, id) {
     const t = findTodo(id);
     if (!t || t.deleted) return null;
     emoji = t.emoji; title = t.text; desc = t.desc;
-    meta = chips([t.done ? 'Erledigt' : t.list === 'today' ? 'Heute' : 'Später']);
+    meta = chips([t.done ? 'Erledigt' : todoSection(t) === 'today' ? 'Heute' : 'Später', t.day ? esc(fmt({ weekday: 'long', day: 'numeric', month: 'long' }).format(parse(t.day))) : '', t.time ? `${icon('clock')} ${esc(t.time)} Uhr${todoRemindActive(t) ? ` · Erinnerung ${esc(beforeText(t.before))}` : ''}` : '']);
     if ((t.subs || []).length) extra = `<ul class="peek-subs" aria-label="Unterpunkte">${t.subs.map((x) => `<li class="${x.done ? 'done' : ''}"><span class="check small" aria-hidden="true">${x.done ? icon('check') : ''}</span><span>${esc(x.text)}</span></li>`).join('')}</ul>`;
   }
   return `<div class="peek-card">
@@ -1885,6 +2100,35 @@ $('#view').addEventListener('keydown', (e) => {              // Tastatur: Pfeil 
 });
 $('#view').addEventListener('contextmenu', (e) => { if (e.target.closest('.drag-handle')) e.preventDefault(); });
 
+/* ---------- Wochenstreifen: nach links/rechts wischen wechselt die Woche (Pfeile im Kopf sind die Alternative ohne Wischen) ---------- */
+let wkSw = null;
+$('#view').addEventListener('pointerdown', (e) => {
+  const strip = e.target.closest('.wk-strip');
+  if (!strip || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  wkSw = { strip, x: e.clientX, y: e.clientY, pid: e.pointerId, locked: false, dx: 0 };
+});
+window.addEventListener('pointermove', (e) => {
+  if (!wkSw || e.pointerId !== wkSw.pid) return;
+  const dx = e.clientX - wkSw.x, dy = e.clientY - wkSw.y;
+  if (!wkSw.locked) {
+    if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { wkSw = null; return; }   // senkrecht = Scrollen
+    if (Math.abs(dx) < 10) return;
+    wkSw.locked = true; clearPress();
+    try { wkSw.strip.setPointerCapture(e.pointerId); } catch (_) { /* egal */ }
+  }
+  wkSw.dx = dx; wkSw.strip.style.transition = 'none'; wkSw.strip.style.transform = `translateX(${dx * .5}px)`;
+});
+function endWkSwipe(e, cancelled) {
+  if (!wkSw || e.pointerId !== wkSw.pid) return;
+  const s = wkSw; wkSw = null;
+  if (!s.locked) return;
+  swSuppress = true; setTimeout(() => { swSuppress = false; }, 80);   // der Klick nach dem Wischen soll keinen Tag öffnen
+  if (!cancelled && Math.abs(s.dx) >= 56) { weekNav(s.dx < 0 ? 1 : -1); return; }
+  s.strip.style.transition = ''; s.strip.style.transform = '';
+}
+window.addEventListener('pointerup', (e) => endWkSwipe(e, false));
+window.addEventListener('pointercancel', (e) => endWkSwipe(e, true));
+
 function shiftMonth(n) {
   const d = new Date(calMonth.y, calMonth.m + n, 1);
   return { y: d.getFullYear(), m: d.getMonth() };
@@ -1914,7 +2158,8 @@ function route(fromNav) {
     }
     case 'gewohnheiten': view = 'habits'; habitsSub = 'list'; break;
     case 'erinnerungen': view = 'habits'; habitsSub = 'reminders'; break;
-    case 'todo': view = 'todo'; break;
+    case 'todo': view = 'todo'; break;                       // Ansicht (Einfach/Woche) bleibt, wie zuletzt gewählt
+    case 'todo-einfach': case 'todo-woche': view = 'todo'; todoMode = page === 'todo-woche' ? 'week' : 'simple'; lsSet('habit-tracker-todo-mode', todoMode); break;
     case 'todo-neu': view = 'todoform'; editingTodoId = null; todoForm = newTodoDraft(null); break;
     case 'todo-bearbeiten': {
       const t = findTodo(arg);
@@ -1949,7 +2194,7 @@ $('#import-file').addEventListener('change', async (e) => {
     const d = j.data || j;
     if (!Array.isArray(d.habits) || typeof (d.log || {}) !== 'object') throw new Error('format');
     if (!confirm('Alle aktuellen Daten durch das Backup ersetzen?')) return;
-    state = { ...emptyState(), habits: migrateHabits(d.habits), log: d.log || {}, skip: d.skip || {}, todos: (d.todos || []).map((t) => ({ ...t, subs: t.subs || [], desc: t.desc || '' })), presets: d.presets || [], settings: { ...defaultSettings(), ...(d.settings || {}) } };
+    state = { ...emptyState(), habits: migrateHabits(d.habits), log: d.log || {}, skip: d.skip || {}, todos: (d.todos || []).map((t) => ({ ...t, subs: t.subs || [], desc: t.desc || '', day: t.day || '', time: t.time || '', before: t.before ?? null })), presets: d.presets || [], settings: { ...defaultSettings(), ...(d.settings || {}) } };
     const now = Date.now();                                 // alles gilt als frisch geändert und wird hochgeladen
     state.habits.forEach((h) => touchHabit(h, now));
     for (const src of [state.log, state.skip]) for (const [day, m] of Object.entries(src)) for (const id of Object.keys(m)) { state.ts[day + '|' + id] = now; state.dirty.logs[day + '|' + id] = 1; }

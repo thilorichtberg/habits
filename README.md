@@ -10,7 +10,7 @@ Ohne Anmeldung läuft alles lokal im Browser (Daten bleiben auf dem Gerät). Syn
 ## Funktionen
 
 **Habits**
-- Abhaken per Kreis, Ziele pro Tag (zum Beispiel „2 Bananen"), frei wählbare Wochentage
+- Abhaken per Kreis mit kleiner Belohnungs-Animation (Haken, Ring, Funken; die Flamme brennt kurz, wenn die Serie wächst), Ziele pro Tag (zum Beispiel „2 Bananen"), frei wählbare Wochentage
 - Uhrzeit mit Erinnerung zur Uhrzeit oder **beliebig lange vorher** (Minuten bis 14 Tage)
 - Wischgesten: nach links löschen (mit Rückfrage und „Wiederherstellen"), nach rechts **überspringen mit Grund**. „Krankheit" zählt weder als verpasst noch in die Quote. Bei „Sonstiges“ kann man einen eigenen Grund eintippen, der in der Zeile und im Tagesbericht steht
 - Optionales Emoji als Symbol links neben dem Namen: Ein Fenster mit **allen Emojis** (3.583 inkl. Hauttöne) mit deutscher Suche und Kategorien. Bekannte Wörter im Namen („Wasser“ → 💧, „Zähne putzen“ → 🦷) setzen das passende Emoji sofort selbst ein
@@ -21,7 +21,9 @@ Ohne Anmeldung läuft alles lokal im Browser (Daten bleiben auf dem Gerät). Syn
 - Übersicht mit Ø der letzten 30 Tage (heute eingeschlossen) und einer **7-Tage-Tabelle** für bis zu 10 selbst gewählte Gewohnheiten (geschafft, nicht geschafft, kein Termin)
 
 **To-Do**
-- Heute, Später und Erledigt (eingeklappt), Suche, Unterpunkte (standardmäßig eingeklappt, Tippen auf den Zähler klappt auf), Beschreibung, eigene Reihenfolge
+- Umschalter **Einfach | Woche**. Einfach: Heute, Später und Erledigt (eingeklappt), Suche, Unterpunkte (standardmäßig eingeklappt, Tippen auf den Zähler klappt auf), Beschreibung, eigene Reihenfolge
+- **Woche:** Wochenstreifen mit sieben Tages-Chips (bis 3 Aufgaben als Punkte, darüber als Zahl erledigt/gesamt), Wischen auf dem Streifen wechselt die Woche, einklappbare Tage, Aufgaben direkt im Tag anlegen. Nach rechts wischen schiebt eine Aufgabe auf morgen
+- Aufgaben können einen Tag, eine Uhrzeit und eine **Erinnerung** bekommen (dieselbe Auswahl wie bei Habits, bis 14 Tage vorher). Überfällige Aufgaben rutschen auf „Heute“
 - Presets löschen fragt vorher nach
 - Presets: Aufgaben samt Unterpunkten als Vorlage speichern und wieder laden
 - Zählt bewusst nicht zur Habit-Quote
@@ -83,7 +85,7 @@ Die App ist auf mein Supabase-Projekt eingestellt, dort ist die Registrierung au
 
 1. **Supabase-Projekt anlegen.** In den Einstellungen die Option „Automatically expose new tables" ausschalten (die Migrationen vergeben die Rechte ausdrücklich)
 2. **URL und Publishable Key** in `app.js` eintragen (`SUPABASE_URL`, `SUPABASE_KEY`)
-3. **Migrationen** im SQL Editor in dieser Reihenfolge ausführen: `schema.sql`, `push.sql`, `uhrzeit-vorlauf.sql`, `ueberspringen.sql`, `todos.sql`, `todo-unterpunkte.sql`, `emoji.sql`, `tagesreminder.sql`, `uebersicht-woche.sql`, `beschreibungen.sql`, `reihenfolge.sql`, `sonstiger-grund.sql`
+3. **Migrationen** im SQL Editor in dieser Reihenfolge ausführen: `schema.sql`, `push.sql`, `uhrzeit-vorlauf.sql`, `ueberspringen.sql`, `todos.sql`, `todo-unterpunkte.sql`, `emoji.sql`, `tagesreminder.sql`, `uebersicht-woche.sql`, `beschreibungen.sql`, `reihenfolge.sql`, `sonstiger-grund.sql`, `todo-woche.sql`
 4. **Nutzer anlegen** (Authentication → Users, „Auto Confirm User") und danach „Allow new users to sign up" ausschalten
 5. **Push einrichten:**
    - VAPID-Schlüsselpaar erzeugen: `npx web-push generate-vapid-keys`. Den öffentlichen Schlüssel in `app.js` eintragen (`VAPID_PUBLIC_KEY`)
