@@ -86,10 +86,22 @@ function dailyOpenHabits(habits: any[], logs: any[], day: string, weekday: numbe
 }
 // --- Ende Fälligkeit ---
 
+// --- Texte der Benachrichtigungen (rein, wird getestet) ---
+// Der Titel ist immer "Habits" (iOS zeigt ihn fett), darunter steht die eigentliche Nachricht.
 const fmtLead = (b: number) => {
   const d = Math.floor(b / 1440), h = Math.floor((b % 1440) / 60), m = b % 60;
   return [d && `${d} ${d === 1 ? 'Tag' : 'Tage'}`, h && `${h} ${h === 1 ? 'Stunde' : 'Stunden'}`, m && `${m} ${m === 1 ? 'Minute' : 'Minuten'}`].filter(Boolean).join(' ');
 };
+const habitLabel = (h: any) => (h.emoji ? h.emoji + ' ' : '') + h.name;
+function reminderBody(h: any, b: number, when: string, t: string): string {
+  const goal = h.target > 1 ? ` · Ziel: ${h.target}×` : '';
+  return (b > 0 ? `${habitLabel(h)} in ${fmtLead(b)} (${when}${t} Uhr)` : `${habitLabel(h)} jetzt (${t} Uhr)`) + goal;
+}
+function dailyBody(open: any[]): string {
+  const rest = open.length - 3;
+  return `Noch offen heute: ${open.slice(0, 3).map(habitLabel).join(', ')}${rest > 0 ? (rest === 1 ? ' und ein weiteres' : ` und ${rest} weitere`) : ''}`;
+}
+// --- Ende Texte ---
 
 const json = (o: unknown, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { 'Content-Type': 'application/json' } });
@@ -152,12 +164,7 @@ Deno.serve(async (req) => {
           .upsert({ user_id: uid, day, habit_id: '__daily__' }, { onConflict: 'user_id,day,habit_id', ignoreDuplicates: true })
           .select();
         if (claimed?.length) {
-          const names = open.slice(0, 3).map((h: any) => (h.emoji ? h.emoji + ' ' : '') + h.name).join(', ');
-          const payload = JSON.stringify({
-            title: 'Noch offen heute',
-            body: `${open.length} ${open.length === 1 ? 'Habit' : 'Habits'}: ${names}${open.length > 3 ? ' …' : ''}`,
-            tag: 'daily-' + day,
-          });
+          const payload = JSON.stringify({ title: 'Habits', body: dailyBody(open), tag: 'daily-' + day });
           for (const s of list) sent += await send(s, payload);
         }
       }
@@ -190,8 +197,8 @@ Deno.serve(async (req) => {
         : occDay === dayStr(dayNum(day) + 1) ? 'morgen um '
         : `am ${new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(dayNum(occDay) * 86400000))} um `;
       const payload = JSON.stringify({
-        title: (h.emoji ? h.emoji + ' ' : '') + h.name,
-        body: (b > 0 ? `In ${fmtLead(b)}, ${when}${t} Uhr.` : `Jetzt, ${t} Uhr.`) + (h.target > 1 ? ` Ziel: ${h.target}×` : ''),
+        title: 'Habits',
+        body: reminderBody(h, b, when, t),
         tag: 'habit-' + h.id + '-' + occDay,
       });
       for (const s of list) sent += await send(s, payload);

@@ -345,7 +345,13 @@ const REASONS = [
   { id: 'time', label: 'Keine Zeit', note: 'Zählt als nicht geschafft' },
   { id: 'other', label: 'Sonstiges', note: 'Zählt als nicht geschafft' },
 ];
-const reasonOf = (id) => REASONS.find((r) => r.id === id);
+const OTHER_PREFIX = 'other:';                               // "Sonstiges" mit Freitext wird als 'other:Freitext' gespeichert
+function reasonOf(id) {
+  if (typeof id !== 'string') return undefined;
+  const custom = id.startsWith(OTHER_PREFIX) ? id.slice(OTHER_PREFIX.length) : '';
+  const r = REASONS.find((x) => x.id === (custom ? 'other' : id));
+  return r && custom ? { ...r, label: custom, custom } : r;                // eigener Grund: der Text selbst ist die Beschriftung
+}
 const skipOf = (k, id) => (state.skip[k] && state.skip[k][id]) || null;
 const isExcused = (k, id) => { const r = reasonOf(skipOf(k, id)); return !!(r && r.excused); };
 
@@ -715,7 +721,7 @@ function swipeRow(h, inner, skip, ord) {
 function skippedRow(k, h, disabled) {
   const r = reasonOf(skipOf(k, h.id));
   return `<li><div class="habit skipped" data-peek="habit:${h.id}"><span class="habit-check static" aria-hidden="true"><span class="check skip-mark">${icon('skip')}</span></span>
-    <a class="info habit-main" draggable="false" href="#bearbeiten/${h.id}" data-fid="m-${h.id}"><div class="name">${emo(h.emoji)}${esc(h.name)}</div><div class="meta">${esc(r ? r.label : skipOf(k, h.id))}${r && r.excused ? ' · zählt nicht zur Quote' : ''}</div></a>
+    <a class="info habit-main" draggable="false" href="#bearbeiten/${h.id}" data-fid="m-${h.id}"><div class="name">${emo(h.emoji)}${esc(h.name)}</div><div class="meta"><span class="reason-text">${esc(r ? r.label : skipOf(k, h.id))}</span>${r && r.excused ? '<span class="nowrap">· zählt nicht zur Quote</span>' : ''}</div></a>
     <button type="button" class="btn ghost small" data-action="unskip" data-id="${h.id}" data-fid="u-${h.id}" ${disabled ? 'disabled' : ''}>Rückgängig</button></div></li>`;
 }
 
@@ -1399,6 +1405,15 @@ sheet.addEventListener('click', (e) => {
   if (sheetCtx.presetId) { const pid = sheetCtx.presetId; closeSheet(); if (b.dataset.sheet === 'confirm-preset-del') removePreset(pid); return; }
   const h = state.habits.find((x) => x.id === sheetCtx.id);
   const { k } = sheetCtx;
+  if (h && b.dataset.sheet === 'reason' && b.dataset.reason === 'other') { openOtherReason(h); return; }   // zweiter Schritt: Textfeld im selben Blatt
+  if (h && b.dataset.sheet === 'reason-text') {
+    const txt = ($('#skip-text').value || '').trim().slice(0, 80);
+    closeSheet();
+    const val = txt ? OTHER_PREFIX + txt : 'other';
+    setSkip(k, h, val);
+    toast(`„${h.name}“ übersprungen (Sonstiges)`, undefined, { label: 'Rückgängig', run: () => setSkip(k, h, null) });   // der volle Grund steht in der Zeile, der Hinweis bleibt kurz
+    return;
+  }
   closeSheet();
   if (!h) return;
   if (b.dataset.sheet === 'confirm-delete') removeHabit(h);
@@ -1408,6 +1423,17 @@ sheet.addEventListener('click', (e) => {
     toast(`„${h.name}“ übersprungen (${r ? r.label : b.dataset.reason})`, undefined, { label: 'Rückgängig', run: () => setSkip(k, h, null) });
   }
 });
+sheet.addEventListener('keydown', (e) => {                    // Enter im Textfeld überspringt
+  if (e.key === 'Enter' && e.target.id === 'skip-text') { e.preventDefault(); sheet.querySelector('[data-sheet="reason-text"]').click(); }
+});
+function openOtherReason(h) {
+  openSheet(`<div class="sheet-head"><h2 id="sheet-title">Sonstiger Grund</h2>
+    <button type="button" class="icon-btn" data-sheet="close" aria-label="Schließen">${icon('x')}</button></div>
+    <div class="field"><label for="skip-text" class="sr">Grund für „${esc(h.name)}“</label>
+      <input id="skip-text" type="text" maxlength="80" autocomplete="off" enterkeyhint="done" placeholder="z. B. Zahnarzttermin"></div>
+    <button type="button" class="btn primary block" data-sheet="reason-text">Überspringen</button>`);
+  $('#skip-text').focus();
+}
 sheet.addEventListener('change', (e) => {
   if (!e.target.classList.contains('wk-check')) return;
   let sel = weekIds();

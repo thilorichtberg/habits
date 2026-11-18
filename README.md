@@ -12,7 +12,7 @@ Ohne Anmeldung läuft alles lokal im Browser (Daten bleiben auf dem Gerät). Syn
 **Habits**
 - Abhaken per Kreis, Ziele pro Tag (zum Beispiel „2 Bananen"), frei wählbare Wochentage
 - Uhrzeit mit Erinnerung zur Uhrzeit oder **beliebig lange vorher** (Minuten bis 14 Tage)
-- Wischgesten: nach links löschen (mit Rückfrage und „Wiederherstellen"), nach rechts **überspringen mit Grund**. „Krankheit" zählt weder als verpasst noch in die Quote
+- Wischgesten: nach links löschen (mit Rückfrage und „Wiederherstellen"), nach rechts **überspringen mit Grund**. „Krankheit" zählt weder als verpasst noch in die Quote. Bei „Sonstiges“ kann man einen eigenen Grund eintippen, der in der Zeile und im Tagesbericht steht
 - Optionales Emoji als Symbol links neben dem Namen: Ein Fenster mit **allen Emojis** (3.583 inkl. Hauttöne) mit deutscher Suche und Kategorien. Bekannte Wörter im Namen („Wasser“ → 💧, „Zähne putzen“ → 🦷) setzen das passende Emoji sofort selbst ein
 - Optionale Beschreibung (bis 500 Zeichen). **Lange auf eine Zeile drücken** vergrößert sie als Karte in die Bildschirmmitte, mit Details und Beschreibung; für Tastatur und Screenreader gibt es dazu den Knopf „Details anzeigen“
 - **Eigene Reihenfolge:** Am Griff mit den sechs Punkten ziehen (halten oder direkt ziehen) sortiert um. Antippen des Griffs öffnet eine Auswahl („Ganz oben“, „Nach oben“ …), per Tastatur geht es mit Pfeil hoch und runter. Die Reihenfolge gilt an jedem Tag und wird synchronisiert, neue Einträge kommen ganz unten dazu
@@ -29,6 +29,7 @@ Ohne Anmeldung läuft alles lokal im Browser (Daten bleiben auf dem Gerät). Syn
 **Erinnerungen (Web Push)**
 - Pro Habit zur eingestellten Zeit, auch bei geschlossener App
 - Tägliche Sammel-Erinnerung (Standard 20:00, einstellbar), wenn noch Habits offen sind
+- Benachrichtigungen haben immer den Titel „Habits“ (fett), darunter steht die Nachricht, z. B. „💧 Wasser trinken in 15 Minuten (um 08:30 Uhr)“
 
 **Technik und Bedienung**
 - **Local-first:** Die App arbeitet immer lokal und gleicht im Hintergrund mit der Cloud ab. Pro Eintrag gewinnt die jüngere Änderung (last write wins)
@@ -82,7 +83,7 @@ Die App ist auf mein Supabase-Projekt eingestellt, dort ist die Registrierung au
 
 1. **Supabase-Projekt anlegen.** In den Einstellungen die Option „Automatically expose new tables" ausschalten (die Migrationen vergeben die Rechte ausdrücklich)
 2. **URL und Publishable Key** in `app.js` eintragen (`SUPABASE_URL`, `SUPABASE_KEY`)
-3. **Migrationen** im SQL Editor in dieser Reihenfolge ausführen: `schema.sql`, `push.sql`, `uhrzeit-vorlauf.sql`, `ueberspringen.sql`, `todos.sql`, `todo-unterpunkte.sql`, `emoji.sql`, `tagesreminder.sql`, `uebersicht-woche.sql`, `beschreibungen.sql`, `reihenfolge.sql`
+3. **Migrationen** im SQL Editor in dieser Reihenfolge ausführen: `schema.sql`, `push.sql`, `uhrzeit-vorlauf.sql`, `ueberspringen.sql`, `todos.sql`, `todo-unterpunkte.sql`, `emoji.sql`, `tagesreminder.sql`, `uebersicht-woche.sql`, `beschreibungen.sql`, `reihenfolge.sql`, `sonstiger-grund.sql`
 4. **Nutzer anlegen** (Authentication → Users, „Auto Confirm User") und danach „Allow new users to sign up" ausschalten
 5. **Push einrichten:**
    - VAPID-Schlüsselpaar erzeugen: `npx web-push generate-vapid-keys`. Den öffentlichen Schlüssel in `app.js` eintragen (`VAPID_PUBLIC_KEY`)
