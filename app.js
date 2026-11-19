@@ -791,9 +791,10 @@ function todayHTML() {
   const canSwipe = !isFuture;
 
   let main;
-  if (!hs.length) main = `<div class="empty"><h2>Für diesen Tag ist nichts geplant</h2><p>Heute ist Pause.</p></div>`;
-  else if (open.length) main = `<ul class="list">${open.map((h) => habitRow(k, h, isFuture, canSwipe, canSwipe && open.length > 1)).join('')}</ul>${canSwipe ? `<p class="hint swipe-hint">Nach links wischen löscht, nach rechts überspringt. Lange drücken zeigt Details, am Griff ziehen sortiert.</p>` : ''}`;
-  else main = `<div class="empty compact"><h2>Nichts mehr offen</h2><p>Gut gemacht.</p></div>`;
+  const addHabit = isToday ? `<a class="add-habit" href="#neu" draggable="false">${icon('plus')}<span>Gewohnheit hinzufügen</span></a>` : '';   // führt zur Neu-Seite, nach dem Anlegen geht es direkt zurück zu Heute
+  if (!hs.length) main = `<div class="empty"><h2>Für diesen Tag ist nichts geplant</h2><p>Heute ist Pause.</p></div>${addHabit}`;
+  else if (open.length) main = `<ul class="list">${open.map((h) => habitRow(k, h, isFuture, canSwipe, canSwipe && open.length > 1)).join('')}</ul>${addHabit}${canSwipe ? `<p class="hint swipe-hint">Nach links wischen löscht, nach rechts überspringt. Lange drücken zeigt Details, am Griff ziehen sortiert.</p>` : ''}`;
+  else main = `<div class="empty compact"><h2>Nichts mehr offen</h2><p>Gut gemacht.</p></div>${addHabit}`;
 
   const folds = foldHTML('skip', 'Übersprungen', skipped, (h) => skippedRow(k, h, isFuture)) + foldHTML('done', 'Erledigt', done, (h) => habitRow(k, h, isFuture, false));
   return `<div class="view-in">${head}${backBtn}${hero}${main}${folds}</div>`;
@@ -2356,6 +2357,9 @@ document.addEventListener('click', (e) => {                    // Tastatur (Ente
   if (el) { playRelease(el); lastPress = { sel: pressSelector(el), t: Date.now() }; }
 }, true);
 
+/* ---------- Kein Zoomen, kein Querformat ---------- */
+['gesturestart', 'gesturechange', 'gestureend'].forEach((t) => document.addEventListener(t, (e) => e.preventDefault()));   // iOS: Pinch-Zoom abfangen
+try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('portrait').catch(() => { /* geht nur in installierter App (Android) */ }); } catch (_) { /* egal */ }
 /* ---------- Start ---------- */
 route();
 tick();

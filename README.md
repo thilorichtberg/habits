@@ -10,6 +10,7 @@ Ohne Anmeldung läuft alles lokal im Browser (Daten bleiben auf dem Gerät). Syn
 ## Funktionen
 
 **Habits**
+- Direkt auf „Heute“ per „+ Gewohnheit hinzufügen“ neue Habits anlegen, danach geht es zurück zu Heute
 - Abhaken per Kreis mit kleiner Belohnungs-Animation (Haken, Ring, Funken; die Flamme brennt kurz, wenn die Serie wächst), Ziele pro Tag (zum Beispiel „2 Bananen"), frei wählbare Wochentage
 - Uhrzeit mit Erinnerung zur Uhrzeit oder **beliebig lange vorher** (Minuten bis 14 Tage)
 - Wischgesten: nach links löschen (mit Rückfrage und „Wiederherstellen"), nach rechts **überspringen mit Grund**. „Krankheit" zählt weder als verpasst noch in die Quote. Bei „Sonstiges“ kann man einen eigenen Grund eintippen, der in der Zeile und im Tagesbericht steht
@@ -36,6 +37,7 @@ Ohne Anmeldung läuft alles lokal im Browser (Daten bleiben auf dem Gerät). Syn
 **Technik und Bedienung**
 - **Local-first:** Die App arbeitet immer lokal und gleicht im Hintergrund mit der Cloud ab. Pro Eintrag gewinnt die jüngere Änderung (last write wins)
 - Backup als JSON (Export/Import), Hell- und Dunkelmodus, Seitenleiste für künftige Apps
+- Nur Hochformat und kein Zoomen (iOS zeigt im Querformat einen Hinweis)
 - Umschalter mit gleitender Hinterlegung wie die Reiterleiste, Drück-Animationen, Rücksicht auf „Bewegung reduzieren", Screenreader-Namen, Tastatur-Alternativen zu den Wischgesten
 - Updates kommen sofort an (Service Worker fragt immer beim Server nach); Version und „Auf Updates prüfen" stehen in den Einstellungen
 

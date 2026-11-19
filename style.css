@@ -61,7 +61,7 @@
 /* ---------- Base ---------- */
 [hidden] { display: none !important; }                      /* sonst überschreibt z. B. display:grid das hidden-Attribut */
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html { -webkit-text-size-adjust: 100%; scroll-padding-top: calc(var(--topbar-h) + env(safe-area-inset-top) + var(--s2)); scroll-padding-bottom: calc(var(--tabbar-h) + var(--s5) + env(safe-area-inset-bottom)); }
+html { touch-action: pan-x pan-y; -webkit-text-size-adjust: 100%; scroll-padding-top: calc(var(--topbar-h) + env(safe-area-inset-top) + var(--s2)); scroll-padding-bottom: calc(var(--tabbar-h) + var(--s5) + env(safe-area-inset-bottom)); }
 button, a, label, summary { touch-action: manipulation; }   /* kein 300-ms-Tap-Delay */
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 body {
@@ -743,3 +743,21 @@ input[type="time"]::-webkit-datetime-edit, input[type="date"]::-webkit-datetime-
 .filters.has-ind .chip-filter[aria-current="page"] { border-color: transparent; }
 .seg a, .filters .chip-filter { transition: color 240ms var(--ease); }
 @media (prefers-reduced-motion: reduce) { .sl-ind { transition: none; } .seg a, .filters .chip-filter { transition: none; } }
+
+/* ---------- Nur Hochformat: im Querformat (Handy) deckt ein Hinweis die App zu ---------- */
+#rotate-hint { display: none; }
+@media (orientation: landscape) and (max-height: 520px) and (min-aspect-ratio: 13/10) {   /* nur echtes Querformat, nicht die geöffnete Tastatur */
+  #rotate-hint { position: fixed; inset: 0; z-index: 9999; display: grid; align-content: center; justify-items: center; gap: var(--s2); padding: var(--s5); text-align: center; background: var(--bg); color: var(--text); }
+  body > :not(#rotate-hint) { visibility: hidden; }
+}
+#rotate-hint svg { width: 56px; height: 56px; stroke: var(--accent); fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; animation: rotate-hint 2.6s var(--ease) infinite; }
+#rotate-hint strong { font-size: 1.1875rem; }
+#rotate-hint span { color: var(--muted); }
+@keyframes rotate-hint { 0%, 15% { transform: rotate(-90deg); } 55%, 100% { transform: rotate(0); } }
+@media (prefers-reduced-motion: reduce) { #rotate-hint svg { animation: none; } }
+
+/* ---------- Heute: Gewohnheit direkt hinzufügen (führt zur Neu-Seite) ---------- */
+.add-habit { display: flex; align-items: center; justify-content: center; gap: var(--s2); min-height: 52px; margin-top: var(--s2); border: 1.5px dashed var(--border); border-radius: var(--r-md); color: var(--accent); font-weight: 700; text-decoration: none; transition: background-color var(--t-fast), border-color var(--t-fast); }
+.add-habit .ic { width: 20px; height: 20px; }
+.add-habit:active { background: var(--accent-soft); border-color: var(--accent); }
+.add-habit + .swipe-hint { margin-top: var(--s3); }
